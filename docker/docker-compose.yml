@@ -1,0 +1,291 @@
+# =============================================================================
+# CHBIndex — Docker Compose Configuration
+# =============================================================================
+# Starts the full Airflow stack as isolated containers.
+# Airflow runs separately from the project's .venv to avoid
+# dependency conflicts (Airflow pins FastAPI and PyYAML versions
+# that conflict with the ML/GIS stack).
+#
+# Usage:
+#   Start:   docker-compose up -d
+#   Stop:    docker-compose down
+#   Logs:    docker-compose logs -f airflow-webserver
+#   UI:      http://localhost:8080 (admin / admin)
+#
+# First time setup:
+#   docker-compose up airflow-init    ← run this once to initialize DB
+#   docker-compose up -d              ← then start everything
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SHARED ENVIRONMENT
+# Variables shared across all Airflow containers.
+# -----------------------------------------------------------------------------
+
+x-airflow-common:
+  &airflow-common
+
+  # Official Airflow image with Python 3.12
+  # We extend this with our custom Dockerfile.airflow which adds
+  # all the GIS and ML packages Airflow tasks need to import.
+  image: apache/airflow:3.3.0-python3.12
+
+  # Build from our custom Dockerfile instead of using the base image directly.
+  # Dockerfile.airflow installs GeoPandas, OSMnx, XGBoost etc. into
+  # Airflow's own Python environment so DAG tasks can import them.
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.airflow
+
+  environment:
+    &airflow-common-env
+
+    # Database connection — Airflow stores all state in PostgreSQL
+    # Format: postgresql+psycopg2://user:password@host/database
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+
+    # CeleryExecutor: runs tasks in parallel across worker containers
+    # Alternative: SequentialExecutor (one task at a time, no Redis needed)
+    # We use Celery because our 4 DAGs have parallel tasks
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+
+    # Redis connection — Celery uses Redis as a message broker
+    # Scheduler puts tasks on the Redis queue, workers pick them up
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+
+    # Security — secret key for signing web session cookies
+    # Reads from .env file — never hardcoded here
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+
+    # Fernet key for encrypting sensitive values in the database
+    # Reads from .env file — never hardcoded here
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+
+    # DAG settings
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'    # don't load Airflow's tutorial DAGs
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Los_Angeles
+
+    # API authentication for triggering DAGs programmatically
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+
+    # Pass project secrets into Airflow containers
+    # These come from your .env file
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+    GCP_SERVICE_ACCOUNT_PATH: /opt/airflow/secrets/service-account.json
+    GEE_SERVICE_ACCOUNT: ${GEE_SERVICE_ACCOUNT}
+
+  volumes:
+    # DAG files — edit in VS Code, Airflow sees changes immediately
+    - ../airflow/dags:/opt/airflow/dags
+
+    # Custom Airflow plugins (our spatial operators)
+    - ../airflow/plugins:/opt/airflow/plugins
+
+    # Airflow logs — persisted outside container so they survive restarts
+    - airflow-logs:/opt/airflow/logs
+
+    # Source code — Airflow tasks import from src/
+    # Mounted so tasks can call src/spatial/kriging.py etc.
+    - ../src:/opt/airflow/src
+
+    # GCP service account key — mounted as read-only secret
+    # Never baked into the image — mounted at runtime from your local path
+    - ${GCP_SERVICE_ACCOUNT_PATH}:/opt/airflow/secrets/service-account.json:ro
+
+  # Airflow containers depend on postgres and redis being healthy first
+  depends_on:
+    &airflow-common-depends-on
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+# =============================================================================
+# SERVICES
+# Each service is one container. All containers share one network
+# so they can reach each other by service name (e.g. "postgres", "redis")
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # POSTGRES — Airflow's metadata database
+  # Stores DAG run history, task states, variables, connections
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      # Persist database data outside container
+      # Without this, all Airflow history is lost on docker-compose down
+      - postgres-db:/var/lib/postgresql/data
+    healthcheck:
+      # Docker waits for this command to succeed before starting Airflow
+      # Prevents Airflow from starting before the database is ready
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # REDIS — Celery message broker
+  # Passes task assignments from scheduler to workers
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # AIRFLOW WEBSERVER — the UI at localhost:8080
+  # Where you trigger DAGs, monitor runs, view logs
+  # ---------------------------------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      # localhost:8080 → container:8080
+      # Open http://localhost:8080 in your browser to see the Airflow UI
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # AIRFLOW SCHEDULER — the brain
+  # Reads DAG files, decides what to run and when, puts tasks on Redis queue
+  # ---------------------------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # AIRFLOW WORKER — the hands
+  # Picks tasks off the Redis queue and actually executes them
+  # Runs your Python code — src/ingestion/, src/spatial/, src/ml/ etc.
+  # ---------------------------------------------------------------------------
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    environment:
+      <<: *airflow-common-env
+      # Required for graceful shutdown when docker-compose down is run
+      DUMB_INIT_SETSID: "0"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # AIRFLOW TRIGGERER — handles deferred tasks
+  # Required for tasks that wait for external events (GEE export completion)
+  # Without this, tasks that use deferrable operators hang forever
+  # ---------------------------------------------------------------------------
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # AIRFLOW INIT — runs once to set up the database
+  # Creates tables, creates admin user, migrates schema
+  # Exits after completion — not a long-running service
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@chbindex.com \
+          --password admin
+        echo "Airflow initialized successfully"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # FLOWER — Celery monitoring UI at localhost:5555
+  # Shows worker status, task queue, task history
+  # Optional but useful for debugging slow or stuck tasks
+  # ---------------------------------------------------------------------------
+  flower:
+    <<: *airflow-common
+    command: celery flower
+    profiles:
+      - flower    # only starts if you run: docker-compose --profile flower up
+    ports:
+      - "5555:5555"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+
+# =============================================================================
+# VOLUMES
+# Named volumes persist data outside containers.
+# Data survives docker-compose down and docker-compose up cycles.
+# =============================================================================
+
+volumes:
+  postgres-db:      # Airflow metadata — DAG history, task states
+  airflow-logs:     # Task execution logs

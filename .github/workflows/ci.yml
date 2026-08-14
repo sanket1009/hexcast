@@ -1,0 +1,116 @@
+# =============================================================================
+# CHBIndex — Continuous Integration
+# =============================================================================
+# Runs on every push and pull request to any branch.
+# Purpose: catch bugs before they reach main.
+#
+# What it does:
+#   1. Sets up Python 3.12
+#   2. Installs all dependencies
+#   3. Runs ruff linter — catches style and bug issues
+#   4. Runs pytest — confirms all tests pass
+#   5. Reports coverage — shows what percentage of code is tested
+#
+# If any step fails, GitHub shows a red X on the commit.
+# If all steps pass, GitHub shows a green checkmark.
+# =============================================================================
+
+name: CI
+
+# Trigger: run this workflow on every push and pull request
+# 'push' covers direct commits to any branch
+# 'pull_request' covers PRs from feature branches into main
+on:
+  push:
+    branches: ["**"]        # every branch
+  pull_request:
+    branches: ["main"]      # PRs targeting main only
+
+jobs:
+  test:
+    # Run on GitHub's Ubuntu runner — free for public repos
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1 — Check out the repository code
+      # Without this, the runner has no code to work with
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2 — Set up Python 3.12
+      # Matches the Python version in our Docker containers
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Step 3 — Cache pip dependencies
+      # GitHub caches the installed packages between runs.
+      # If requirements.txt hasn't changed, pip install is skipped.
+      # Saves 3-5 minutes per CI run.
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Step 4 — Install dependencies
+      # Install all packages from requirements.txt
+      # --quiet reduces output noise in CI logs
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt --quiet
+
+      # Step 5 — Run ruff linter
+      # Checks for PEP 8 violations, unused imports, undefined variables
+      # Fails the CI run if any linting errors are found
+      # This enforces code quality on every commit
+      - name: Run ruff linter
+        run: |
+          ruff check src/ --output-format=github
+
+      # Step 6 — Run ruff formatter check
+      # Checks that code is formatted correctly with black-compatible style
+      # --check means "report errors but don't fix them"
+      # Fixing is the developer's job, not CI's job
+      - name: Check code formatting
+        run: |
+          ruff format src/ --check
+
+      # Step 7 — Run pytest with coverage
+      # --cov=src: measure coverage for everything in src/
+      # --cov-report=term-missing: show which lines aren't covered
+      # --cov-fail-under=60: fail if coverage drops below 60%
+      # We set 60% as the floor — realistic for a project in active development
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-fail-under=60 \
+            -v
+        env:
+          # Mock environment variables for tests
+          # Tests should never use real API keys
+          # src/utils/config_loader.py reads these from environment
+          ANTHROPIC_API_KEY: "test-key-not-real"
+          GCP_PROJECT_ID: "test-project"
+          GCP_SERVICE_ACCOUNT_PATH: "/tmp/fake-key.json"
+          GEE_SERVICE_ACCOUNT: "test@test.iam.gserviceaccount.com"
+          GEE_PRIVATE_KEY_PATH: "/tmp/fake-gee-key.json"
+          EPA_AQS_EMAIL: "test@test.com"
+          EPA_AQS_KEY: "test@test.com"
+
+      # Step 8 — Upload coverage report
+      # Saves the coverage report as a GitHub Actions artifact
+      # You can download and view it from the Actions tab
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()    # upload even if tests failed — useful for debugging
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 7

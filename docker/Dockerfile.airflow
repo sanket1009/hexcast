@@ -1,0 +1,79 @@
+# =============================================================================
+# CHBIndex — Custom Airflow Image
+# =============================================================================
+# Extends the official Airflow image with GIS, ML, and RAG packages
+# needed by DAG tasks.
+#
+# Build: docker-compose build
+# This runs automatically when you run: docker-compose up
+# =============================================================================
+
+# Start from the official Airflow image with Python 3.12
+# This gives us Airflow 3.3.0 pre-installed with all its dependencies
+# We add our packages ON TOP of this — never replacing Airflow's packages
+FROM apache/airflow:3.3.0-python3.12
+
+# Switch to root user temporarily to install system dependencies
+# Airflow's base image runs as the 'airflow' user for security
+# We need root to install system-level packages with apt-get
+USER root
+
+# Install system dependencies required by GIS packages
+# These are C libraries that Python GIS packages depend on under the hood:
+#
+# libgdal-dev    — GDAL: the C library underlying rasterio and pyogrio
+#                  reads GeoTIFF, Shapefile, GeoPackage formats
+# libgeos-dev    — GEOS: the C library underlying Shapely
+#                  performs geometric operations (intersection, buffer, etc.)
+# libproj-dev    — PROJ: the C library underlying pyproj
+#                  handles coordinate system transformations
+# libspatialindex-dev — R-tree spatial index used by GeoPandas for fast
+#                       spatial joins
+# gcc g++        — C/C++ compilers needed to build some Python extensions
+# git            — required by DVC and some ML packages
+#
+# apt-get flags:
+# -y           = answer yes to all prompts (non-interactive)
+# --no-install-recommends = skip optional packages to keep image small
+# rm -rf /var/lib/apt/lists/* = delete package cache after install
+#                               keeps image size smaller
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libgdal-dev \
+        libgeos-dev \
+        libproj-dev \
+        libspatialindex-dev \
+        gcc \
+        g++ \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Switch back to airflow user
+# All pip installs run as the airflow user — not root
+# This is a security best practice — never run application code as root
+USER airflow
+
+# Copy our trimmed requirements file into the image
+# COPY source destination
+# source: relative to the build context (project root, set in docker-compose)
+# destination: inside the container
+COPY docker/requirements-airflow.txt /requirements-airflow.txt
+
+# Install Python packages into Airflow's Python environment
+#
+# --no-cache-dir    = don't cache downloaded packages
+#                     keeps image size smaller
+# --constraint      = Airflow publishes official constraint files that list
+#                     exactly which package versions work with each Airflow
+#                     release. Using constraints prevents version conflicts.
+#                     This is the official Airflow-recommended install method.
+RUN pip install --no-cache-dir \
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.0/constraints-3.12.txt" \
+    -r /requirements-airflow.txt
+
+# Add project src/ to Python path
+# This allows DAG tasks to import from src/ using:
+#   from src.spatial.kriging import run_kriging
+#   from src.ingestion.epa_aqs import pull_pm25
+# Without this, Python inside the container can't find src/
+ENV PYTHONPATH="/opt/airflow/src:${PYTHONPATH}"
