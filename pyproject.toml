@@ -1,0 +1,235 @@
+# =============================================================================
+# CHBIndex — Project Configuration
+# =============================================================================
+# Single source of truth for project metadata and tool configuration.
+# Replaces: setup.py, setup.cfg, .flake8, pytest.ini, mypy.ini
+#
+# Tools that read this file automatically:
+#   ruff    — linter and formatter (reads [tool.ruff])
+#   pytest  — test runner (reads [tool.pytest.ini_options])
+#   black   — formatter (reads [tool.black])
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PROJECT METADATA
+# Describes what this project is and who built it.
+# Required if you ever want to install the project as a package with pip.
+# -----------------------------------------------------------------------------
+
+[project]
+name = "chbindex"
+version = "0.1.0"
+description = "Compound Climate-Health Burden Index — weekly spatial ML pipeline scoring LA County census tracts on compounded heat, air quality, and healthcare access risk"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+
+# Your details — update these
+authors = [
+    { name = "Sanket", email = "your.email@example.com" }
+]
+
+keywords = [
+    "geospatial",
+    "spatial-data-science",
+    "climate-health",
+    "machine-learning",
+    "apache-airflow",
+    "kriging",
+    "gis",
+    "public-health"
+]
+
+# PyPI classifiers — used if you publish to PyPI
+# Also useful for communicating the project's maturity and audience
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Programming Language :: Python :: 3.12",
+]
+
+# -----------------------------------------------------------------------------
+# RUFF — linter and formatter
+# Ruff replaces flake8, isort, and parts of pylint in one fast tool.
+# Written in Rust — runs in milliseconds even on large codebases.
+# GitHub Actions runs: ruff check src/ on every push
+# -----------------------------------------------------------------------------
+
+[tool.ruff]
+
+# Maximum line length — 88 matches black's default
+# Lines longer than this get flagged
+line-length = 88
+
+# Python version to target for syntax checking
+target-version = "py312"
+
+# Which files and folders to lint
+# We only lint our own code — not generated files or notebooks
+include = ["src/**/*.py", "tests/**/*.py", "airflow/dags/**/*.py"]
+
+# Files and folders to completely ignore
+exclude = [
+    ".venv",
+    "__pycache__",
+    "*.egg-info",
+    ".git",
+    "notebooks",       # notebooks are exploratory — not held to same standard
+    "mlflow",
+    "chromadb",
+]
+
+[tool.ruff.lint]
+
+# Which rule sets to enable
+# E, W = pycodestyle (PEP 8 style rules)
+# F = pyflakes (undefined names, unused imports)
+# I = isort (import ordering)
+# N = pep8-naming (naming conventions)
+# UP = pyupgrade (modernize Python syntax)
+# B = flake8-bugbear (common bug patterns)
+# These are the rules most production teams enforce
+select = ["E", "W", "F", "I", "N", "UP", "B"]
+
+# Rules we explicitly ignore
+ignore = [
+    "E501",   # line too long — handled by formatter, not linter
+    "B008",   # do not perform function calls in default arguments
+              # FastAPI uses this pattern legitimately (Depends())
+    "N803",   # argument name should be lowercase
+              # spatial libraries use single-letter variables (X, y)
+    "N806",   # variable in function should be lowercase
+              # same reason — X, y are standard ML conventions
+]
+
+# Allow unused imports in __init__.py files
+# __init__.py files often import things to make them available
+# at the package level without using them directly
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]   # F401 = imported but unused
+"tests/**/*.py" = ["S101"] # S101 = use of assert (fine in tests)
+
+[tool.ruff.lint.isort]
+# Group imports in this order:
+# 1. Standard library (os, sys, pathlib)
+# 2. Third party (geopandas, xgboost, fastapi)
+# 3. Local (src.utils.config_loader)
+known-first-party = ["src"]
+
+[tool.ruff.format]
+# Use double quotes for strings — consistent with black
+quote-style = "double"
+
+# Indent with 4 spaces — PEP 8 standard
+indent-style = "space"
+
+# -----------------------------------------------------------------------------
+# PYTEST — test runner configuration
+# pytest reads this automatically when you run: pytest
+# No need to specify options on the command line every time
+# -----------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+
+# Where to find tests
+testpaths = ["tests"]
+
+# Default options applied to every pytest run
+# -v: verbose output — shows each test name and result
+# --tb=short: short traceback on failure — easier to read than full traceback
+addopts = "-v --tb=short"
+
+# Test file naming pattern
+# pytest looks for files matching this pattern
+python_files = ["test_*.py"]
+
+# Test function naming pattern
+# pytest runs functions matching this pattern inside test files
+python_functions = ["test_*"]
+
+# Test class naming pattern
+python_classes = ["Test*"]
+
+# Markers — custom labels you can apply to tests
+# Run only spatial tests: pytest -m spatial
+# Run only fast tests: pytest -m "not slow"
+# Skip integration tests in CI: pytest -m "not integration"
+markers = [
+    "spatial: tests for spatial computation modules",
+    "ml: tests for machine learning modules",
+    "rag: tests for RAG pipeline modules",
+    "integration: tests that require external APIs (slow, skip in CI)",
+    "slow: tests that take more than 10 seconds",
+]
+
+# Filter out noisy warnings from third-party libraries
+# These warnings are not our code's fault and clutter test output
+filterwarnings = [
+    "ignore::DeprecationWarning:geopandas",
+    "ignore::DeprecationWarning:pyproj",
+    "ignore::FutureWarning:pandas",
+    "ignore::UserWarning:shapely",
+]
+
+# Minimum pytest version required
+minversion = "8.0"
+
+# -----------------------------------------------------------------------------
+# COVERAGE — test coverage configuration
+# Works with pytest-cov to measure which lines of code are tested
+# Run with: pytest --cov=src tests/
+# -----------------------------------------------------------------------------
+
+[tool.coverage.run]
+
+# Which source code to measure coverage for
+source = ["src"]
+
+# Files to exclude from coverage measurement
+# __init__.py files are mostly imports — not meaningful to measure
+omit = [
+    "src/**/__init__.py",
+    "tests/**",
+    ".venv/**",
+]
+
+[tool.coverage.report]
+
+# Lines matching these patterns are excluded from coverage reporting
+# These are lines that genuinely can't be tested automatically
+exclude_lines = [
+    "pragma: no cover",      # explicit opt-out
+    "if __name__ == .__main__.:",  # script entry points
+    "raise NotImplementedError",   # abstract method placeholders
+    "pass",                        # empty placeholder functions
+]
+
+# Show lines not covered in the terminal report
+show_missing = true
+
+# Minimum coverage percentage — fail if below this
+# 60% is realistic for a project in active development
+# Increase to 70% once the project is more complete
+fail_under = 60
+
+# -----------------------------------------------------------------------------
+# BLACK — code formatter (used as reference for ruff format)
+# Black is the most widely used Python formatter
+# Running: black src/ formats all files automatically
+# -----------------------------------------------------------------------------
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | __pycache__
+  | notebooks
+  | mlflow
+  | chromadb
+)/
+'''
