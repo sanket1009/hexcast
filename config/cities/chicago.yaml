@@ -1,0 +1,138 @@
+# =============================================================================
+# CHBIndex — City Configuration: Cook County (Chicago), Illinois
+# =============================================================================
+# This file is the validation city config — proving CHBIndex deploys to any
+# US county by changing config values alone. Zero pipeline code changes needed.
+# Cook County is the second most populous county in the US (after LA County)
+# and has a well-documented history of extreme heat mortality — the 1995
+# Chicago Heat Wave killed 739 people, mostly in low-income neighborhoods
+# with poor healthcare access. This makes it an ideal validation case.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# IDENTITY
+# -----------------------------------------------------------------------------
+
+city_name: "Chicago"
+county_name: "Cook County"
+state_name: "Illinois"
+
+# Cook County FIPS: state 17 (Illinois) + county 031 = 17031
+state_fips: "17"
+county_fips: "031"
+full_fips: "17031"          # used by EPA AQS, Census TIGER, CDC PLACES APIs
+
+# -----------------------------------------------------------------------------
+# GEOGRAPHY
+# Bounding box verified against Census TIGER Cook County boundary.
+# Format: [west, south, east, north] in decimal degrees (WGS84).
+# -----------------------------------------------------------------------------
+
+bbox:
+  west: -88.2635
+  south:  41.4696
+  east: -87.5241
+  north:  42.1543
+
+# Geographic CRS — standard lat/lon for APIs and spatial joins
+crs: "EPSG:4326"
+
+# Projected CRS for distance-based operations (Kriging variogram, OSMnx).
+# EPSG:26916 = UTM Zone 16N — correct projection for Chicago/Illinois.
+# Note: this differs from LA (UTM Zone 11N). Config-driven design handles
+# this automatically — no code changes needed.
+crs_projected: "EPSG:26916"
+
+# -----------------------------------------------------------------------------
+# POPULATION & SCALE
+# Source: US Census Bureau Vintage 2025 estimates, released March 27, 2026.
+# Accessed via FRED (Federal Reserve Bank of St. Louis), series ILCOOK1POP.
+# -----------------------------------------------------------------------------
+
+population: 5_194_625       # US Census Bureau Vintage 2025, March 2026
+census_tract_count: 1319    # approximate — exact count pulled at runtime
+                            # from Census TIGER API and stored in BigQuery
+
+# -----------------------------------------------------------------------------
+# DATA SOURCE PARAMETERS
+# -----------------------------------------------------------------------------
+
+# EPA AQS parameters
+# Cook County Department of Environment and Sustainability (CCDES) operates
+# 12 PM2.5 monitoring sites throughout Cook County as of 2026.
+# Illinois EPA 2026 Network Plan confirms 20+ PM2.5 sites across Chicago MSA
+# but only 12 are within Cook County proper.
+epa_aqs:
+  state_code: "17"
+  county_code: "031"
+  parameter_code: "88101"   # PM2.5 FRM/FEM — same as LA, universal code
+  monitor_count: 12         # Cook County CCDES network, confirmed 2026
+
+# Google Earth Engine parameters
+# Identical collection and band to LA — Landsat 9 covers the entire US.
+# Cloud cover threshold kept at 20% — Chicago has more cloudy days than LA
+# so we may get fewer usable scenes per week. Pipeline handles missing
+# weeks by using the most recent available composite.
+gee:
+  collection: "LANDSAT/LC09/C02/T1_L2"
+  scale: 30                 # meters per pixel — same as LA
+  cloud_cover_max: 20       # percent — may need tuning for Chicago winters
+  lst_band: "ST_B10"        # thermal infrared band — same as LA
+
+# OSMnx road network parameters
+# Chicago's grid-based road network is denser than LA's.
+# Default speed kept at 40 km/h — OSM has good speed tagging for Chicago.
+osmnx:
+  network_type: "drive"
+  speed_kmh_default: 40
+
+# Healthcare facility parameters
+# Chicago has a different hospital density than LA — catchment thresholds
+# remain the same because they are clinically defined standards, not
+# city-specific values. The 2SFCA model will naturally reflect Chicago's
+# higher hospital density in the access scores.
+healthcare:
+  er_catchment_minutes: 30
+  primary_care_catchment_minutes: 20
+  er_count: 63              # Illinois Health Facilities and Services Review
+                            # Board licensed acute care hospitals with EDs
+                            # in Cook County — verify at runtime via HIFLD
+
+# -----------------------------------------------------------------------------
+# COMPOUND BURDEN INDEX THRESHOLDS
+# Identical to LA — thresholds are policy decisions, not city-specific.
+# Keeping them identical enables direct comparison between cities.
+# If Chicago's score distribution differs significantly from LA's,
+# thresholds can be tuned here without touching LA config.
+# -----------------------------------------------------------------------------
+
+burden_thresholds:
+  high_risk: 0.75
+  critical: 0.90
+
+hotspot_significance:
+  standard: 0.05
+  high: 0.01
+
+# -----------------------------------------------------------------------------
+# AIRFLOW PIPELINE SCHEDULE
+# Same weekly cadence as LA — runs independently, not triggered by LA DAG.
+# Chicago pipeline can be enabled/disabled without touching LA pipeline.
+# -----------------------------------------------------------------------------
+
+schedule:
+  cron: "0 7 * * 1"        # every Monday 7:00 AM (CT) — 1 hour after LA run
+  start_date: "2024-01-01"
+  catchup: false
+
+# -----------------------------------------------------------------------------
+# GCP RESOURCES
+# Separate BigQuery dataset and GCS bucket from LA — data never mixes.
+# Naming convention chbindex_{fips} is consistent with LA.
+# -----------------------------------------------------------------------------
+
+gcp:
+  bigquery_dataset: "chbindex_17031"    # all Chicago tables live here
+  gcs_bucket: "chbindex-17031-data"    # all Chicago raw files live here
+  gcs_raster_prefix: "rasters/lst/"
+  location: "US"  

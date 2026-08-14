@@ -1,0 +1,210 @@
+# =============================================================================
+# CHBIndex — Git Ignore Rules
+# =============================================================================
+# Files and folders listed here are never tracked by Git.
+# Rule: if it contains secrets, is machine-generated, is too large,
+#       or is environment-specific — it belongs here.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# SECRETS — never commit these under any circumstances
+# Committing .env exposes API keys in Git history permanently.
+# Even after deletion, keys in history must be considered compromised.
+# -----------------------------------------------------------------------------
+
+.env
+*.pem
+*.key
+service-account*.json
+gee-private-key*.json
+*credentials*.json
+
+
+# -----------------------------------------------------------------------------
+# PYTHON VIRTUAL ENVIRONMENT
+# .venv contains thousands of installed packages — never committed.
+# Anyone cloning the repo runs: pip install -r requirements.txt
+# to recreate the environment from scratch.
+# -----------------------------------------------------------------------------
+
+.venv/
+venv/
+env/
+ENV/
+
+
+# -----------------------------------------------------------------------------
+# PYTHON BYTECODE
+# Python compiles .py files to .pyc bytecode for faster execution.
+# These are machine-generated and machine-specific — never committed.
+# -----------------------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+
+# -----------------------------------------------------------------------------
+# RASTER DATA FILES
+# GeoTIFF and raster files can be gigabytes in size.
+# Git is not designed for large binary files — use DVC instead.
+# These live in data/raw/lst_rasters/ and are versioned by DVC.
+# -----------------------------------------------------------------------------
+
+*.tif
+*.tiff
+*.geotiff
+*.img
+*.nc
+*.hdf
+*.h5
+
+
+# -----------------------------------------------------------------------------
+# LARGE DATA FILES
+# GeoParquet and Parquet files are binary and can be large.
+# Tracked by DVC, not Git. Raw data is never committed to Git.
+# -----------------------------------------------------------------------------
+
+*.parquet
+*.geoparquet
+*.gpkg
+*.shp
+*.dbf
+*.prj
+*.shx
+data/raw/
+data/processed/
+data/features/
+
+
+# -----------------------------------------------------------------------------
+# MLFLOW EXPERIMENT TRACKING
+# mlruns/ contains model artifacts, metrics, and parameters from every
+# training run. These can be gigabytes and are environment-specific.
+# Recreated by rerunning the training pipeline.
+# -----------------------------------------------------------------------------
+
+mlflow/mlruns/
+mlruns/
+
+
+# -----------------------------------------------------------------------------
+# CHROMADB VECTOR STORE
+# The ChromaDB persistent store contains embedded policy document vectors.
+# Recreated by running src/rag/ingest_docs.py once after cloning.
+# -----------------------------------------------------------------------------
+
+chromadb/chroma_store/
+
+
+# -----------------------------------------------------------------------------
+# JUPYTER NOTEBOOKS — output cells only
+# We commit notebook source code but not cell outputs.
+# Outputs contain data that changes every run and bloats the repo.
+# Use: jupyter nbconvert --clear-output --inplace notebooks/*.ipynb
+# before committing notebooks.
+# -----------------------------------------------------------------------------
+
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+
+# -----------------------------------------------------------------------------
+# LOGS
+# Log files are runtime artifacts — never committed.
+# If you need to share logs, copy them manually.
+# -----------------------------------------------------------------------------
+
+logs/
+*.log
+*.log.*
+
+
+# -----------------------------------------------------------------------------
+# MACOS SYSTEM FILES
+# macOS creates .DS_Store files in every folder you open in Finder.
+# These are invisible system files that mean nothing to the project.
+# -----------------------------------------------------------------------------
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+
+# -----------------------------------------------------------------------------
+# VS CODE
+# VS Code creates a .vscode/ folder with editor-specific settings.
+# These are personal preferences — not project configuration.
+# Exception: if your team agrees to share launch.json or settings.json,
+# remove those specific files from this rule.
+# -----------------------------------------------------------------------------
+
+.vscode/
+*.code-workspace
+
+
+# -----------------------------------------------------------------------------
+# PYTEST + COVERAGE
+# Test runner artifacts — generated during CI/CD, never committed.
+# -----------------------------------------------------------------------------
+
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+
+# -----------------------------------------------------------------------------
+# DISTRIBUTION / BUILD
+# If you ever package this project, build artifacts go here.
+# Never committed — regenerated by the build process.
+# -----------------------------------------------------------------------------
+
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+
+
+# -----------------------------------------------------------------------------
+# DVC (Data Version Control)
+# DVC stores data file metadata in .dvc files — these ARE committed.
+# The actual data files are not — they live in remote storage.
+# The DVC cache is local and never committed.
+# -----------------------------------------------------------------------------
+
+.dvc/cache/
+.dvc/tmp/
+
+
+# -----------------------------------------------------------------------------
+# DOCKER
+# Docker creates temporary files during builds.
+# -----------------------------------------------------------------------------
+
+.dockerignore
+docker/postgres-data/
+
+
+# -----------------------------------------------------------------------------
+# ENVIRONMENT SPECIFIC
+# Temporary files created during development.
+# -----------------------------------------------------------------------------
+
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.idea/

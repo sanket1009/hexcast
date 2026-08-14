@@ -1,0 +1,162 @@
+# =============================================================================
+# CHBIndex — City Configuration: Los Angeles County
+# =============================================================================
+# This file is the single source of truth for all LA-specific parameters.
+# Every pipeline module reads from this file via src/utils/config_loader.py.
+# To run the pipeline for a different city, create a new file in this folder
+# and point the pipeline at it. Zero code changes required.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# IDENTITY
+# What this city is called and how the US government identifies it.
+# -----------------------------------------------------------------------------
+
+city_name: "Los Angeles"
+county_name: "Los Angeles County"
+state_name: "California"
+
+# FIPS codes are the US Census Bureau's official geographic identifiers.
+# Every county in the US has a unique 5-digit FIPS code.
+# Format: first 2 digits = state, last 3 digits = county.
+# LA County: state 06 (California) + county 037 = 06037
+# We use this to filter Census TIGER, EPA AQS, and CDC PLACES API calls.
+state_fips: "06"
+county_fips: "037"
+full_fips: "06037"          # state + county combined — most APIs want this format
+
+# -----------------------------------------------------------------------------
+# GEOGRAPHY
+# The spatial extent and coordinate reference system for this city.
+# -----------------------------------------------------------------------------
+
+# Bounding box: the rectangular geographic boundary that contains LA County.
+# Format: [west, south, east, north] — all in decimal degrees (WGS84).
+# We use this to clip satellite rasters, filter road networks, and
+# constrain API calls to the LA County geographic footprint.
+# These values were verified against the Census TIGER LA County boundary.
+bbox:
+  west: -118.9448
+  south:  33.7037
+  east: -117.6462
+  north:  34.8233
+
+# CRS = Coordinate Reference System. Defines how we map 2D coordinates
+# onto the curved surface of the earth.
+# EPSG:4326 = WGS84 = standard latitude/longitude. Used by GPS, Google Maps,
+# and most web APIs. Every geometry in this pipeline uses this CRS.
+# If two layers have different CRS they cannot be spatially joined — they
+# would be misaligned. Defining it here ensures consistency across all modules.
+crs: "EPSG:4326"
+
+# Projected CRS for operations that require distance in meters (not degrees).
+# EPSG:26911 = UTM Zone 11N — the correct projection for Southern California.
+# We use this for OSMnx network analysis (travel time needs meters, not degrees)
+# and for Kriging variogram fitting (distance units must be consistent).
+crs_projected: "EPSG:26911"
+
+# -----------------------------------------------------------------------------
+# POPULATION & SCALE
+# Source: US Census Bureau Vintage 2025 estimates, released March 27, 2026.
+# LA County population has been declining — peaked at 10M in 2020 census,
+# now at ~9.69M as of 2025. Still the largest county in the US by population.
+# -----------------------------------------------------------------------------
+
+population: 9_690_000       # 9.69M residents — US Census Bureau, March 2026
+census_tract_count: 2300    # approximate — exact count pulled from Census API
+                            # at runtime and stored in BigQuery 
+
+# -----------------------------------------------------------------------------
+# DATA SOURCE PARAMETERS
+# City-specific filter values passed to each ingestion module.
+# -----------------------------------------------------------------------------
+
+# EPA AQS API parameters
+# The AQS API requires state + county FIPS separately to filter monitor data.
+# Parameter code 88101 = PM2.5 FRM/FEM — the regulatory standard measurement.
+epa_aqs:
+  state_code: "06"
+  county_code: "037"
+  parameter_code: "88101"   # PM2.5 fine particulate matter
+  monitor_count: 11         # verified regulatory monitors in LA County
+
+# Google Earth Engine parameters
+# Collection ID for Landsat 9 surface temperature product.
+# Scale = spatial resolution in meters per pixel (30m for Landsat 9).
+# Cloud cover threshold: skip any satellite image with >20% cloud cover
+# because clouds contaminate LST readings with cold false values.
+gee:
+  collection: "LANDSAT/LC09/C02/T1_L2"
+  scale: 30                 # meters per pixel
+  cloud_cover_max: 20       # percent — skip cloudy scenes above this threshold
+  lst_band: "ST_B10"        # thermal infrared band used to derive LST
+
+# OSMnx road network parameters
+# Network type 'drive' = driveable roads only (excludes footpaths, cycleways).
+# We use drive because we're modeling vehicle-based ER access, not walking.
+osmnx:
+  network_type: "drive"
+  speed_kmh_default: 40     # default speed where OSM has no speed limit tagged
+
+# Healthcare facility parameters
+# 2SFCA catchment thresholds: how far (in minutes) we consider
+# "accessible" for each facility type.
+# ER: 30 minutes is the clinical standard for emergency care access.
+# Primary care: 20 minutes is the standard for routine access.
+healthcare:
+  er_catchment_minutes: 30
+  primary_care_catchment_minutes: 20
+  er_count: 76    # HASC 2025: all licensed EDs including non-911 facilities
+                  # LA County EMS 2024 report lists 69 nine-one-1 receiving
+                  # hospitals — we use 76 as it covers full public ER access
+
+# -----------------------------------------------------------------------------
+# COMPOUND BURDEN INDEX THRESHOLDS
+# These define what counts as "high risk" for operational decisions.
+# -----------------------------------------------------------------------------
+
+# Compound burden score runs 0.0 to 1.0 after Spatial PCA + normalization.
+# A tract scoring above high_risk_threshold triggers:
+#   - inclusion in the Gi* hotspot analysis
+#   - LLM briefing generation
+#   - alert in the Streamlit dashboard
+# A tract scoring above critical_threshold triggers:
+#   - CRITICAL urgency_level in the LLM briefing
+#   - immediate flag for intervention
+# These thresholds are operationally defined — not statistically derived.
+# They can be tuned after seeing the actual score distribution in Week 2.
+burden_thresholds:
+  high_risk: 0.75
+  critical: 0.90
+
+# Gi* significance levels for hotspot detection.
+# 0.05 = 95% confidence (standard in public health research)
+# 0.01 = 99% confidence (used for CRITICAL cluster designation)
+hotspot_significance:
+  standard: 0.05
+  high: 0.01
+
+# -----------------------------------------------------------------------------
+# AIRFLOW PIPELINE SCHEDULE
+# How often the pipeline runs for this city.
+# Cron format: minute hour day month weekday
+# "0 6 * * 1" = every Monday at 6:00 AM
+# Monday morning means fresh weekly data is ready for Tuesday briefings.
+# -----------------------------------------------------------------------------
+
+schedule:
+  cron: "0 6 * * 1"        # every Monday 6:00 AM
+  start_date: "2024-01-01"  # historical backfill starts from this date
+  catchup: false            # don't backfill all missed runs on first start
+
+# -----------------------------------------------------------------------------
+# GCP RESOURCES
+# BigQuery dataset and GCS bucket for this city's data.
+# Naming convention: chbindex_{fips} keeps cities isolated in the same project.
+# -----------------------------------------------------------------------------
+
+gcp:
+  bigquery_dataset: "chbindex_06037"    # all LA tables live here
+  gcs_bucket: "chbindex-06037-data"    # all LA raw files live here
+  gcs_raster_prefix: "rasters/lst/"   # folder path inside the bucket
+  location: "US"                       # BigQuery dataset region
