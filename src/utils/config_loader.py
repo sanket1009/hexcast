@@ -82,7 +82,7 @@ class GeeConfig(BaseModel):
     """Google Earth Engine parameters — required for LST ingestion."""
     collection: str
     scale: int
-    cloud_cover_max: int
+    cloud_cover_max: int    
     lst_band: str
 
 
