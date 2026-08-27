@@ -1,0 +1,427 @@
+"""
+bigquery.py
+===========
+Shared BigQuery read/write utilities for the CHBIndex pipeline.
+
+Every module that needs to interact with BigQuery imports from here.
+This prevents duplicated boilerplate across ingestion, spatial,
+ML, and RAG modules.
+
+Usage:
+    from src.utils.bigquery import write_dataframe, read_query, table_exists
+
+    # Write a DataFrame to BigQuery
+    write_dataframe(df, "epa_pm25_raw", config)
+
+    # Read a SQL query result into a DataFrame
+    df = read_query("SELECT * FROM epa_pm25_raw WHERE week = '2026-08-18'", config)
+
+    # Check if a table exists before writing
+    if table_exists("epa_pm25_raw", config):
+        write_dataframe(df, "epa_pm25_raw", config)
+"""
+
+from typing import Any, Optional
+import pandas as pd
+from google.cloud import bigquery
+from google.oauth2 import service_account
+
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Client factory
+# ---------------------------------------------------------------------------
+
+def get_client(config: dict[str, Any]) -> bigquery.Client:
+    """
+    Create and return an authenticated BigQuery client.
+
+    Authenticates using the GCP service account JSON key file
+    whose path is stored in config["secrets"]["GCP_SERVICE_ACCOUNT_PATH"].
+
+    Parameters
+    ----------
+    config : dict
+        Merged pipeline config from config_loader.load_config().
+        Must contain config["secrets"]["GCP_PROJECT_ID"] and
+        config["secrets"]["GCP_SERVICE_ACCOUNT_PATH"].
+
+    Returns
+    -------
+    bigquery.Client
+        Authenticated BigQuery client ready to use.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the service account key file does not exist.
+    google.auth.exceptions.DefaultCredentialsError
+        If the service account key is invalid.
+
+    Examples
+    --------
+    >>> client = get_client(config)
+    >>> client.project
+    'your-gcp-project-id'
+    """
+    project_id = config["secrets"]["GCP_PROJECT_ID"]
+    sa_path = config["secrets"]["GCP_SERVICE_ACCOUNT_PATH"]
+
+    logger.debug(f"Creating BigQuery client for project {project_id}")
+
+    # If service account path is provided and exists, use it
+    # Otherwise fall back to Application Default Credentials (ADC)
+    # ADC works when running on GCP (Cloud Run, GCE) automatically
+    if sa_path and sa_path != "/tmp/fake-key.json":
+        credentials = service_account.Credentials.from_service_account_file(
+            sa_path,
+            scopes=["https://www.googleapis.com/auth/bigquery"],
+        )
+        client = bigquery.Client(
+            project=project_id,
+            credentials=credentials,
+        )
+    else:
+        # Fall back to Application Default Credentials
+        # Used in CI/CD and when running on GCP infrastructure
+        client = bigquery.Client(project=project_id)
+
+    logger.debug(f"BigQuery client created successfully")
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Write operations
+# ---------------------------------------------------------------------------
+
+def write_dataframe(
+    df: pd.DataFrame,
+    table_name: str,
+    config: dict[str, Any],
+    write_disposition: Optional[str] = None,
+) -> None:
+    """
+    Write a pandas DataFrame to a BigQuery table.
+
+    The full table reference is constructed automatically from config:
+    {GCP_PROJECT_ID}.{bigquery_dataset}.{table_name}
+
+    For example, if config has:
+        gcp.bigquery_dataset = "chbindex_06037"
+        secrets.GCP_PROJECT_ID = "my-project"
+    And table_name = "epa_pm25_raw"
+    Then the full table is: my-project.chbindex_06037.epa_pm25_raw
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to write. Column names become BigQuery column names.
+        Must not be empty.
+    table_name : str
+        Name of the destination table (without project or dataset prefix).
+    config : dict
+        Merged pipeline config from config_loader.load_config().
+    write_disposition : str, optional
+        How to handle existing data in the table.
+        "WRITE_APPEND"   — add new rows (default, for weekly updates)
+        "WRITE_TRUNCATE" — delete all existing rows first (full reload)
+        "WRITE_EMPTY"    — fail if table already has data
+        If None, reads from config["bigquery"]["write_disposition"].
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    ValueError
+        If the DataFrame is empty.
+    google.api_core.exceptions.GoogleAPIError
+        If the BigQuery write job fails.
+
+    Examples
+    --------
+    >>> write_dataframe(epa_df, "epa_pm25_raw", config)
+    >>> write_dataframe(scores_df, "compound_scores", config, write_disposition="WRITE_TRUNCATE")
+    """
+    if df.empty:
+        logger.warning(f"DataFrame is empty — skipping write to {table_name}")
+        return
+
+    # Construct full table reference
+    project_id = config["secrets"]["GCP_PROJECT_ID"]
+    dataset = config["gcp"]["bigquery_dataset"]
+    full_table_id = f"{project_id}.{dataset}.{table_name}"
+
+    # Use write disposition from config if not explicitly provided
+    if write_disposition is None:
+        write_disposition = config["bigquery"]["write_disposition"]
+
+    logger.info(f"Writing {len(df):,} rows to {full_table_id}")
+    logger.debug(f"Write disposition: {write_disposition}")
+    logger.debug(f"Columns: {list(df.columns)}")
+
+    client = get_client(config)
+
+    # Configure the load job
+    job_config = bigquery.LoadJobConfig(
+        write_disposition=write_disposition,
+        # autodetect=True lets BigQuery infer schema from the DataFrame
+        # For production, you'd define explicit schemas to prevent
+        # type inference errors on edge cases
+        autodetect=True,
+        # Partition by the field defined in pipeline.yaml
+        # This keeps query costs low as the dataset grows over weeks
+        time_partitioning=bigquery.TimePartitioning(
+            field=config["bigquery"]["partition_field"],
+        ) if _has_partition_field(df, config) else None,
+    )
+
+    # Submit the load job and wait for completion
+    # job.result() blocks until the job finishes or raises an exception
+    job = client.load_table_from_dataframe(
+        df,
+        full_table_id,
+        job_config=job_config,
+    )
+    job.result()
+
+    logger.info(f"Successfully wrote {len(df):,} rows to {full_table_id}")
+
+
+# ---------------------------------------------------------------------------
+# Read operations
+# ---------------------------------------------------------------------------
+
+def read_query(
+    query: str,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    """
+    Execute a BigQuery SQL query and return results as a DataFrame.
+
+    Parameters
+    ----------
+    query : str
+        Standard SQL query string.
+        Use fully qualified table names:
+        SELECT * FROM `project.dataset.table`
+        Or use the {dataset} placeholder which gets substituted automatically.
+    config : dict
+        Merged pipeline config from config_loader.load_config().
+
+    Returns
+    -------
+    pd.DataFrame
+        Query results. Empty DataFrame if query returns no rows.
+
+    Examples
+    --------
+    >>> df = read_query(
+    ...     "SELECT * FROM `my-project.chbindex_06037.compound_scores`"
+    ...     " WHERE week_start_date = '2026-08-18'",
+    ...     config
+    ... )
+    >>> len(df)
+    2310
+    """
+    # Substitute {dataset} placeholder for convenience
+    # Allows queries like: "SELECT * FROM {dataset}.compound_scores"
+    project_id = config["secrets"]["GCP_PROJECT_ID"]
+    dataset = config["gcp"]["bigquery_dataset"]
+    query = query.format(
+        dataset=f"{project_id}.{dataset}",
+        project=project_id,
+    )
+
+    logger.info(f"Executing BigQuery query")
+    logger.debug(f"Query: {query[:200]}...")  # log first 200 chars only
+
+    client = get_client(config)
+
+    # Configure query job
+    job_config = bigquery.QueryJobConfig(
+        # Use cached results if the same query was run recently
+        # Saves query costs during development when running same queries
+        use_query_cache=True,
+    )
+
+    # Execute query and convert to DataFrame
+    df = client.query(query, job_config=job_config).to_dataframe()
+
+    logger.info(f"Query returned {len(df):,} rows")
+    return df
+
+
+def read_table(
+    table_name: str,
+    config: dict[str, Any],
+    columns: Optional[list[str]] = None,
+    where: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Read an entire BigQuery table into a DataFrame.
+
+    Convenience wrapper around read_query for simple table reads
+    without writing full SQL.
+
+    Parameters
+    ----------
+    table_name : str
+        Table name without project or dataset prefix.
+    config : dict
+        Merged pipeline config.
+    columns : list of str, optional
+        Specific columns to read. If None, reads all columns.
+    where : str, optional
+        SQL WHERE clause (without the WHERE keyword).
+        Example: "week_start_date = '2026-08-18'"
+
+    Returns
+    -------
+    pd.DataFrame
+        Table contents matching the filter.
+
+    Examples
+    --------
+    >>> # Read all compound scores for this week
+    >>> df = read_table(
+    ...     "compound_scores",
+    ...     config,
+    ...     columns=["geoid", "compound_score", "urgency_level"],
+    ...     where="week_start_date = '2026-08-18'"
+    ... )
+    """
+    project_id = config["secrets"]["GCP_PROJECT_ID"]
+    dataset = config["gcp"]["bigquery_dataset"]
+    full_table_id = f"`{project_id}.{dataset}.{table_name}`"
+
+    # Build SELECT clause
+    select_clause = ", ".join(columns) if columns else "*"
+
+    # Build query
+    query = f"SELECT {select_clause} FROM {full_table_id}"
+    if where:
+        query += f" WHERE {where}"
+
+    return read_query(query, config)
+
+
+# ---------------------------------------------------------------------------
+# Utility operations
+# ---------------------------------------------------------------------------
+
+def table_exists(
+    table_name: str,
+    config: dict[str, Any],
+) -> bool:
+    """
+    Check whether a BigQuery table exists.
+
+    Used before writing to decide whether to create or append.
+    Prevents errors from writing to non-existent tables.
+
+    Parameters
+    ----------
+    table_name : str
+        Table name without project or dataset prefix.
+    config : dict
+        Merged pipeline config.
+
+    Returns
+    -------
+    bool
+        True if the table exists, False otherwise.
+
+    Examples
+    --------
+    >>> if not table_exists("compound_scores", config):
+    ...     logger.info("Table doesn't exist yet — will be created on first write")
+    """
+    project_id = config["secrets"]["GCP_PROJECT_ID"]
+    dataset = config["gcp"]["bigquery_dataset"]
+    full_table_id = f"{project_id}.{dataset}.{table_name}"
+
+    client = get_client(config)
+
+    try:
+        client.get_table(full_table_id)
+        logger.debug(f"Table {full_table_id} exists")
+        return True
+    except Exception:
+        logger.debug(f"Table {full_table_id} does not exist")
+        return False
+
+
+def get_row_count(
+    table_name: str,
+    config: dict[str, Any],
+) -> int:
+    """
+    Return the number of rows in a BigQuery table.
+
+    Used for data quality checks after writes —
+    confirms the expected number of rows landed correctly.
+
+    Parameters
+    ----------
+    table_name : str
+        Table name without project or dataset prefix.
+    config : dict
+        Merged pipeline config.
+
+    Returns
+    -------
+    int
+        Number of rows in the table. 0 if table doesn't exist.
+
+    Examples
+    --------
+    >>> count = get_row_count("epa_pm25_raw", config)
+    >>> logger.info(f"EPA table has {count:,} rows")
+    """
+    if not table_exists(table_name, config):
+        return 0
+
+    project_id = config["secrets"]["GCP_PROJECT_ID"]
+    dataset = config["gcp"]["bigquery_dataset"]
+
+    df = read_query(
+        f"SELECT COUNT(*) as row_count "
+        f"FROM `{project_id}.{dataset}.{table_name}`",
+        config,
+    )
+    return int(df["row_count"].iloc[0])
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+def _has_partition_field(
+    df: pd.DataFrame,
+    config: dict[str, Any],
+) -> bool:
+    """
+    Check if the DataFrame contains the partition field.
+
+    Only apply time partitioning if the DataFrame has the
+    partition column — not all tables are time-partitioned.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame being written to BigQuery.
+    config : dict
+        Merged pipeline config.
+
+    Returns
+    -------
+    bool
+        True if partition field exists in DataFrame columns.
+    """
+    partition_field = config["bigquery"]["partition_field"]
+    return partition_field in df.columns
