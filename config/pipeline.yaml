@@ -1,0 +1,87 @@
+# =============================================================================
+# CHBIndex — Global Pipeline Configuration
+# =============================================================================
+# This file contains settings that apply to ALL cities equally.
+# It is merged with the city-specific config at runtime by config_loader.py.
+# Rule: if a value changes per city → it belongs in cities/{city}.yaml
+#       if a value is the same for every city → it belongs here
+# =============================================================================
+
+airflow:
+  max_retries: 3
+  retry_delay_minutes: 5
+  task_timeout_minutes: 60
+  email_on_failure: false
+  email_on_retry: false
+
+rate_limits:
+  epa_aqs_request_delay_seconds: 1.5
+  cdc_places_request_delay_seconds: 1.0
+  gee_poll_interval_seconds: 30
+  gee_export_timeout_minutes: 45
+
+bigquery:
+  write_batch_size: 5000
+  write_disposition: "WRITE_APPEND"
+  job_timeout_seconds: 300
+  partition_field: "week_start_date"
+
+spatial:
+  kriging_variogram_model: "spherical"
+  kriging_n_jobs: -1
+  h3_resolution: 7
+  h3_lag_rings: 2
+  lst_zonal_stats:
+    - "mean"
+    - "std"
+    - "max"
+  lst_min_pixel_count: 10
+
+ml:
+  random_seed: 42
+  cv_folds: 5
+  training_weeks: 52
+  temporal_lag_weeks:
+    - 1
+    - 2
+    - 4
+  shap_background_samples: 100
+  mlflow_tracking_uri: "mlflow/mlruns"
+  xgboost:
+    n_estimators: 500
+    learning_rate: 0.05
+    max_depth: 6
+    subsample: 0.8
+    colsample_bytree: 0.8
+    early_stopping_rounds: 50
+  lightgbm:
+    n_estimators: 500
+    learning_rate: 0.05
+    num_leaves: 31
+    subsample: 0.8
+    colsample_bytree: 0.8
+    early_stopping_rounds: 50
+  ab_test_significance_threshold: 0.05
+
+rag:
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  chroma_persist_path: "chromadb/chroma_store"
+  chroma_collection_name: "chbindex_policy_docs"
+  top_k_chunks: 3
+  chunk_size: 800
+  chunk_overlap: 100
+  anthropic:
+    model: "claude-sonnet-4-6"
+    max_tokens: 500
+    temperature: 0
+  urgency_levels:
+    - "MONITOR"
+    - "ELEVATED"
+    - "CRITICAL"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  log_to_file: false
+  log_file_path: "logs/chbindex.log"
