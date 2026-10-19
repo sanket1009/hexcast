@@ -70,6 +70,7 @@ rag:
   top_k_chunks: 3
   chunk_size: 800
   chunk_overlap: 100
+  min_chunk_chars: 100
   anthropic:
     model: "claude-sonnet-4-6"
     max_tokens: 500

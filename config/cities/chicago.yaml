@@ -136,3 +136,6 @@ gcp:
   gcs_bucket: "chbindex-17031-data"    # all Chicago raw files live here
   gcs_raster_prefix: "rasters/lst/"
   location: "US"  
+
+
+policy_docs_dir: "data/policy_docs/chicago"

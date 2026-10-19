@@ -166,6 +166,9 @@ class CityConfig(BaseModel):
     # GCP
     gcp: GcpConfig
 
+    # RAG
+    policy_docs_dir: str
+
     @field_validator("state_fips")
     @classmethod
     def valid_state_fips(cls, v: str) -> str:

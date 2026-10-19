@@ -160,3 +160,5 @@ gcp:
   gcs_bucket: "chbindex-06037-data"    # all LA raw files live here
   gcs_raster_prefix: "rasters/lst/"   # folder path inside the bucket
   location: "US"                       # BigQuery dataset region
+
+policy_docs_dir: "data/policy_docs/los_angeles"
