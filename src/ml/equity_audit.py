@@ -529,9 +529,10 @@ def _log_summary(results_df: pd.DataFrame) -> None:
             flag = " ← DISPARITY FLAGGED" if row["disparity_flag"] else ""
             cause = f" ({row['disparity_likely_cause']})" \
                 if row["disparity_likely_cause"] else ""
+            auc_str = f"{row['auc']:.3f}" if pd.notna(row["auc"]) else "N/A"
             logger.info(
                 f"  {row['subgroup']:20s} | "
-                f"AUC={row['auc'] or 'N/A':.3f} | "
+                f"AUC={auc_str} | "
                 f"n={row['n_tracts']:4d} | "
                 f"precision@10%={row['precision_top_decile']:.3f}"
                 f"{flag}{cause}"
