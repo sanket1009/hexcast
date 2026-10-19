@@ -43,7 +43,7 @@ rasterstats==0.20.0        # zonal statistics — raster summarized by polygon
 rasterio==1.4.3            # raster I/O — read/write GeoTIFF files
 xarray==2026.7.0           # N-dimensional labeled arrays for raster time stacks
 rioxarray==0.23.0          # rasterio extension for xarray
-scipy==1.15.3              # variogram fitting + Wilcoxon signed-rank test
+scipy==1.18.1              # variogram fitting + Wilcoxon signed-rank test
 
 # -----------------------------------------------------------------------------
 # GOOGLE EARTH ENGINE + CLOUD STORAGE
