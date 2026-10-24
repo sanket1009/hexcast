@@ -68,6 +68,7 @@ rag:
   chroma_persist_path: "chromadb/chroma_store"
   chroma_collection_name: "chbindex_policy_docs"
   top_k_chunks: 3
+  max_distance: 0.6
   chunk_size: 800
   chunk_overlap: 150
   chroma_dir: data/chroma
@@ -89,3 +90,4 @@ logging:
   date_format: "%Y-%m-%d %H:%M:%S"
   log_to_file: false
   log_file_path: "logs/chbindex.log"
+
