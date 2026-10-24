@@ -69,8 +69,11 @@ rag:
   chroma_collection_name: "chbindex_policy_docs"
   top_k_chunks: 3
   chunk_size: 800
-  chunk_overlap: 100
+  chunk_overlap: 150
+  chroma_dir: data/chroma
   min_chunk_chars: 100
+  collection_prefix: policy_docs
+  upsert_batch_size: 500
   anthropic:
     model: "claude-sonnet-4-6"
     max_tokens: 500

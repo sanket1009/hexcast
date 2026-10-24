@@ -96,11 +96,16 @@ mlruns/
 # -----------------------------------------------------------------------------
 # CHROMADB VECTOR STORE
 # The ChromaDB persistent store contains embedded policy document vectors.
-# Recreated by running src/rag/ingest_docs.py once after cloning.
+# Rebuilt from data/policy_docs/ by ingest_documents() + build_vectorstore().
 # -----------------------------------------------------------------------------
 
-chromadb/chroma_store/
+data/chroma/
+# -----------------------------------------------------------------------------
+# POLICY DOCUMENTS
+# Source PDFs for the RAG corpus. Download per city into data/policy_docs/<city>/.
+# -----------------------------------------------------------------------------
 
+data/policy_docs/**/*.pdf
 
 # -----------------------------------------------------------------------------
 # JUPYTER NOTEBOOKS — output cells only
