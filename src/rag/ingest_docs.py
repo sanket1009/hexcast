@@ -23,6 +23,7 @@ Usage:
 import hashlib
 from pathlib import Path
 from typing import Any
+import re
 
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
@@ -31,7 +32,10 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-
+# Invisible characters some PDFs insert between words (zero-width no-break
+# space, zero-width space, soft hyphen). They waste chunk space and add
+# noise to embeddings.
+_INVISIBLE_CHARS = re.compile("[\ufeff\u200b\u00ad]")
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
@@ -128,6 +132,8 @@ def _extract_pages(pdf_path: Path) -> list[tuple[int, str]]:
 
     for page_num, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
+        text = _INVISIBLE_CHARS.sub("", text)
+        text = re.sub(r"[ \t]+", " ", text)  # collapse gaps left behind
         if text.strip():
             pages.append((page_num, text))
 

@@ -68,7 +68,7 @@ rag:
   chroma_persist_path: "chromadb/chroma_store"
   chroma_collection_name: "chbindex_policy_docs"
   top_k_chunks: 3
-  max_distance: 0.6
+  max_distance: 0.5  # calibrated 2026-10-24: on-topic 0.26-0.35, negatives 0.69+
   chunk_size: 800
   chunk_overlap: 150
   chroma_dir: data/chroma
