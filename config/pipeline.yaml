@@ -20,6 +20,13 @@ rate_limits:
   gee_poll_interval_seconds: 30
   gee_export_timeout_minutes: 45
 
+storage:
+  # "local" = DuckDB file + local folder (development, no cloud account)
+  # "gcp"   = BigQuery + Cloud Storage (production)
+  backend: "local"
+  local_db_path: "data/warehouse/chbindex.duckdb"
+  local_object_dir: "data/object_store"
+
 bigquery:
   write_batch_size: 5000
   write_disposition: "WRITE_APPEND"

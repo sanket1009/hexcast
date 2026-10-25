@@ -55,6 +55,7 @@ google-cloud-bigquery==3.43.0       # BigQuery read/write
 google-cloud-bigquery-storage==2.40.0  # fast BigQuery reads via Arrow
 google-cloud-storage==2.19.0        # GCS bucket read/write
 db-dtypes==1.4.2           # BigQuery ↔ pandas type conversions
+duckdb==1.5.6              # local warehouse for development (storage.backend: local)
 pyarrow==20.0.0            # columnar memory format — GeoParquet + BigQuery
 
 # -----------------------------------------------------------------------------

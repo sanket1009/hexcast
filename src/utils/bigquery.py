@@ -19,8 +19,17 @@ Usage:
     # Check if a table exists before writing
     if table_exists("epa_pm25_raw", config):
         write_dataframe(df, "epa_pm25_raw", config)
+
+Storage backends:
+    config["storage"]["backend"] chooses where tables live.
+      "gcp"   -> BigQuery (production)
+      "local" -> one DuckDB file on disk (development, no cloud account)
+    Every public function checks this first, so pipeline modules never
+    need to know which backend is active. In local mode, each city's
+    BigQuery dataset name (e.g. chbindex_06037) becomes a DuckDB schema.
 """
 
+from pathlib import Path
 from typing import Any, Optional
 import pandas as pd
 from google.cloud import bigquery
@@ -29,6 +38,87 @@ from google.oauth2 import service_account
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Local backend (DuckDB)
+# ---------------------------------------------------------------------------
+
+def _is_local(config: dict[str, Any]) -> bool:
+    """True when config selects the local DuckDB backend instead of BigQuery."""
+    return config.get("storage", {}).get("backend", "gcp") == "local"
+
+
+def _local_connect(config: dict[str, Any]):
+    """Open the DuckDB file, creating its folder on first use."""
+    import duckdb  # imported here so GCP-only installs don't need it
+
+    db_path = Path(config["storage"]["local_db_path"])
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(db_path))
+
+
+def _local_schema(config: dict[str, Any]) -> str:
+    """The city's BigQuery dataset name doubles as its DuckDB schema."""
+    return config["gcp"]["bigquery_dataset"]
+
+
+def _local_table_exists(con, schema: str, table_name: str) -> bool:
+    return con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema = ? AND table_name = ?",
+        [schema, table_name],
+    ).fetchone()[0] > 0
+
+
+def _local_write(
+    df: pd.DataFrame,
+    table_name: str,
+    config: dict[str, Any],
+    write_disposition: str,
+) -> None:
+    """Write a DataFrame to DuckDB with the same dispositions as BigQuery."""
+    schema = _local_schema(config)
+    full_table = f'"{schema}"."{table_name}"'
+
+    con = _local_connect(config)
+    try:
+        con.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        con.register("incoming_df", df)
+        exists = _local_table_exists(con, schema, table_name)
+
+        if write_disposition == "WRITE_EMPTY" and exists:
+            if con.execute(f"SELECT COUNT(*) FROM {full_table}").fetchone()[0] > 0:
+                raise ValueError(f"WRITE_EMPTY: {full_table} already has data")
+
+        if write_disposition == "WRITE_TRUNCATE" or not exists:
+            con.execute(f"CREATE OR REPLACE TABLE {full_table} AS SELECT * FROM incoming_df")
+        else:
+            # WRITE_APPEND: BY NAME matches columns by name, not position,
+            # like a BigQuery load job does
+            con.execute(f"INSERT INTO {full_table} BY NAME SELECT * FROM incoming_df")
+    finally:
+        con.close()
+
+    logger.info(f"Successfully wrote {len(df):,} rows to local {full_table}")
+
+
+def _local_query(query: str, config: dict[str, Any]) -> pd.DataFrame:
+    """Run a query against DuckDB, resolving the {dataset} placeholder."""
+    schema = _local_schema(config)
+    query = query.format(dataset=f'"{schema}"', project="local").replace("`", "")
+
+    logger.info("Executing local DuckDB query")
+    logger.debug(f"Query: {query[:200]}...")
+
+    con = _local_connect(config)
+    try:
+        df = con.execute(query).df()
+    finally:
+        con.close()
+
+    logger.info(f"Query returned {len(df):,} rows")
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +250,10 @@ def write_dataframe(
     if write_disposition is None:
         write_disposition = config["bigquery"]["write_disposition"]
 
+    if _is_local(config):
+        _local_write(df, table_name, config, write_disposition)
+        return
+
     logger.info(f"Writing {len(df):,} rows to {full_table_id}")
     logger.debug(f"Write disposition: {write_disposition}")
     logger.debug(f"Columns: {list(df.columns)}")
@@ -228,6 +322,9 @@ def read_query(
     >>> len(df)
     2310
     """
+    if _is_local(config):
+        return _local_query(query, config)
+
     # Substitute {dataset} placeholder for convenience
     # Allows queries like: "SELECT * FROM {dataset}.compound_scores"
     project_id = config["secrets"]["GCP_PROJECT_ID"]
@@ -295,9 +392,12 @@ def read_table(
     ...     where="week_start_date = '2026-08-18'"
     ... )
     """
-    project_id = config["secrets"]["GCP_PROJECT_ID"]
-    dataset = config["gcp"]["bigquery_dataset"]
-    full_table_id = f"`{project_id}.{dataset}.{table_name}`"
+    if _is_local(config):
+        full_table_id = f"{{dataset}}.{table_name}"
+    else:
+        project_id = config["secrets"]["GCP_PROJECT_ID"]
+        dataset = config["gcp"]["bigquery_dataset"]
+        full_table_id = f"`{project_id}.{dataset}.{table_name}`"
 
     # Build SELECT clause
     select_clause = ", ".join(columns) if columns else "*"
@@ -341,6 +441,13 @@ def table_exists(
     >>> if not table_exists("compound_scores", config):
     ...     logger.info("Table doesn't exist yet — will be created on first write")
     """
+    if _is_local(config):
+        con = _local_connect(config)
+        try:
+            return _local_table_exists(con, _local_schema(config), table_name)
+        finally:
+            con.close()
+
     project_id = config["secrets"]["GCP_PROJECT_ID"]
     dataset = config["gcp"]["bigquery_dataset"]
     full_table_id = f"{project_id}.{dataset}.{table_name}"
@@ -385,6 +492,10 @@ def get_row_count(
     """
     if not table_exists(table_name, config):
         return 0
+
+    if _is_local(config):
+        df = read_query(f"SELECT COUNT(*) AS row_count FROM {{dataset}}.{table_name}", config)
+        return int(df["row_count"].iloc[0])
 
     project_id = config["secrets"]["GCP_PROJECT_ID"]
     dataset = config["gcp"]["bigquery_dataset"]

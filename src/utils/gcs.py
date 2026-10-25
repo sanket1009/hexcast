@@ -21,9 +21,17 @@ Usage:
 
     # List all LST rasters in the bucket
     blobs = list_blobs(config, prefix="rasters/lst/")
+
+Storage backends:
+    config["storage"]["backend"] chooses where files live.
+      "gcp"   -> the city's GCS bucket (production)
+      "local" -> a folder on disk: {local_object_dir}/{bucket_name}/
+    Paths inside the bucket are identical in both modes, so pipeline
+    modules call these functions the same way either way.
 """
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
@@ -33,6 +41,21 @@ from google.oauth2 import service_account
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Local backend (folder on disk)
+# ---------------------------------------------------------------------------
+
+def _is_local(config: dict[str, Any]) -> bool:
+    """True when config selects the local folder backend instead of GCS."""
+    return config.get("storage", {}).get("backend", "gcp") == "local"
+
+
+def _local_path(gcs_path: str, config: dict[str, Any]) -> Path:
+    """Map a bucket path to its file in the local object store."""
+    root = Path(config["storage"]["local_object_dir"]) / config["gcp"]["gcs_bucket"]
+    return root / gcs_path
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +182,13 @@ def upload_file(
     if gcs_path is None:
         gcs_path = str(local_path)
 
+    if _is_local(config):
+        dest = _local_path(gcs_path, config)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(local_path, dest)
+        logger.info(f"Stored {local_path} → local object store {dest}")
+        return str(dest)
+
     bucket = get_bucket(config)
     blob = bucket.blob(gcs_path)
 
@@ -203,6 +233,13 @@ def upload_bytes(
     str
         Full GCS URI of the uploaded object.
     """
+    if _is_local(config):
+        dest = _local_path(gcs_path, config)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        logger.info(f"Stored {len(data):,} bytes → local object store {dest}")
+        return str(dest)
+
     bucket = get_bucket(config)
     blob = bucket.blob(gcs_path)
 
@@ -266,6 +303,15 @@ def download_file(
     # Create parent directory if it doesn't exist
     local_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if _is_local(config):
+        src = _local_path(gcs_path, config)
+        if not src.exists():
+            raise FileNotFoundError(f"Not in local object store: {src}")
+        if src.resolve() != local_path.resolve():
+            shutil.copy2(src, local_path)
+        logger.info(f"Fetched {src} → {local_path}")
+        return local_path
+
     bucket = get_bucket(config)
     blob = bucket.blob(gcs_path)
 
@@ -299,6 +345,9 @@ def download_bytes(
     bytes
         Raw file contents as bytes.
     """
+    if _is_local(config):
+        return _local_path(gcs_path, config).read_bytes()
+
     bucket = get_bucket(config)
     blob = bucket.blob(gcs_path)
 
@@ -343,6 +392,15 @@ def list_blobs(
     >>> blobs
     ['rasters/lst/la_lst_2026-08-11.tif', 'rasters/lst/la_lst_2026-08-18.tif']
     """
+    if _is_local(config):
+        root = _local_path("", config)
+        if not root.exists():
+            return []
+        paths = sorted(
+            f.relative_to(root).as_posix() for f in root.rglob("*") if f.is_file()
+        )
+        return [p for p in paths if p.startswith(prefix or "")]
+
     bucket = get_bucket(config)
 
     logger.debug(f"Listing blobs in gs://{bucket.name}/{prefix or ''}")
@@ -386,6 +444,9 @@ def blob_exists(
     >>> if not blob_exists("rasters/lst/la_lst_2026-08-18.tif", config):
     ...     export_from_gee(config)
     """
+    if _is_local(config):
+        return _local_path(gcs_path, config).is_file()
+
     bucket = get_bucket(config)
     blob = bucket.blob(gcs_path)
     exists = blob.exists()
@@ -419,5 +480,8 @@ def get_gcs_uri(
     >>> get_gcs_uri("rasters/lst/la_lst_2026-08-18.tif", config)
     'gs://chbindex-06037-data/rasters/lst/la_lst_2026-08-18.tif'
     """
+    if _is_local(config):
+        return str(_local_path(gcs_path, config))
+
     bucket_name = config["gcp"]["gcs_bucket"]
     return f"gs://{bucket_name}/{gcs_path}"

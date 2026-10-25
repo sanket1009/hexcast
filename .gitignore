@@ -80,6 +80,8 @@ __pycache__/
 data/raw/
 data/processed/
 data/features/
+data/warehouse/
+data/object_store/
 
 
 # -----------------------------------------------------------------------------
