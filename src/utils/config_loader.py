@@ -317,6 +317,9 @@ def _load_secrets() -> dict[str, str]:
         "GEE_SERVICE_ACCOUNT": "Google Earth Engine service account email",
         "GEE_PRIVATE_KEY_PATH": "Path to GEE private key JSON file",
         "CENSUS_API_KEY": "Census Data API key for ACS demographics",
+        "EPA_AQS_EMAIL": "EPA AQS registered email (PM2.5 ingestion)",
+        "EPA_AQS_KEY": "EPA AQS API key (PM2.5 ingestion)",
+        "CDC_SOCRATA_APP_TOKEN": "Optional CDC PLACES app token (raises rate limit)",
     }
 
     for key, description in required_secrets.items():

@@ -55,12 +55,17 @@ DAILY_SUMMARY_ENDPOINT = f"{AQS_BASE}/dailyData/byCounty"
 PM25_PARAMETER_CODE = "88101"
 
 # EPA annual PM2.5 standard in μg/m³
-# Readings above this are flagged in the output
-EPA_ANNUAL_STANDARD = 12.0
+# Lowered from 12.0 to 9.0 in Feb 2024; upheld by the D.C. Circuit in
+# June 2026. A weekly mean above it is a screening flag, not a violation
+# (compliance is judged on a 3-year average).
+EPA_ANNUAL_STANDARD = 9.0
 
-# EPA daily PM2.5 standard in μg/m³
-# Readings above this trigger air quality alerts
+# EPA 24-hour PM2.5 standard in μg/m³ (unchanged in the 2024 revision)
 EPA_DAILY_STANDARD = 35.0
+
+# Prefer 24-hour measurements over hourly-derived values when a monitor
+# reports both for the same day. Lower number = preferred.
+SAMPLE_DURATION_PRIORITY = {"24 HOUR": 0, "24-HR BLK AVG": 1, "1 HOUR": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +118,7 @@ def pull_pm25_readings(
     >>> config = load_config("los_angeles")
     >>> df = pull_pm25_readings(config)
     >>> len(df)
-    11
+    8
     >>> df["pm25_mean"].describe()
     count    11.000000
     mean     12.847...
@@ -137,19 +142,34 @@ def pull_pm25_readings(
     )
 
     # Step 1 — Pull daily readings from EPA AQS API
-    daily_df = _fetch_daily_readings(
-        state_code=state_code,
-        county_code=county_code,
-        start_date=week_start,
-        end_date=week_end,
-        config=config,
-    )
+    # AQS requires bdate and edate in the same calendar year, so a week
+    # that spans New Year is fetched in two requests
+    ranges = [(week_start, week_end)]
+    if week_start.year != week_end.year:
+        year_end = datetime(week_start.year, 12, 31)
+        ranges = [(week_start, year_end), (year_end + timedelta(days=1), week_end)]
+
+    parts = [
+        _fetch_daily_readings(
+            state_code=state_code,
+            county_code=county_code,
+            start_date=b,
+            end_date=e,
+            config=config,
+        )
+        for b, e in ranges
+    ]
+    daily_df = pd.concat([d for d in parts if not d.empty], ignore_index=True) if any(
+        not d.empty for d in parts
+    ) else pd.DataFrame()
 
     if daily_df.empty:
         raise ValueError(
             f"No PM2.5 readings returned for {city} "
             f"week of {week_start.strftime('%Y-%m-%d')}. "
-            f"Check EPA AQS API credentials and FIPS codes."
+            f"AQS holds quality-assured data that agencies submit with a lag "
+            f"of roughly two months, so recent weeks are often empty. "
+            f"Pass week_start= for an earlier week."
         )
 
     logger.info(
@@ -279,78 +299,75 @@ def _fetch_daily_readings(
 
     data = response.json()
 
-    # AQS API wraps results in a "Data" key
-    # If "Data" is empty, no readings exist for this period
+    # AQS returns HTTP 200 even on failure; the real status is in Header
+    header = (data.get("Header") or [{}])[0]
+    status = str(header.get("status", ""))
+    if status.lower().startswith("failed"):
+        raise ValueError(f"EPA AQS request failed: {header.get('error')}")
+
     readings = data.get("Data", [])
 
     if not readings:
         logger.warning(
-            f"EPA AQS returned empty Data array for "
+            f"EPA AQS returned no data ({status}) for "
             f"state={state_code} county={county_code} "
             f"bdate={bdate} edate={edate}"
         )
         return pd.DataFrame()
 
-    # Convert to DataFrame
     df = pd.DataFrame(readings)
+    logger.debug(f"Raw AQS response: {len(df)} rows")
 
-    logger.debug(f"Raw AQS response: {len(df)} rows, columns: {list(df.columns)}")
+    # Keep only PM2.5 FRM/FEM rows
+    df = df[df["parameter_code"].astype(str) == PM25_PARAMETER_CODE]
 
-    # Standardize column names
-    # AQS API returns verbose column names — we rename to our standard
-    column_mapping = {
-        "Site Num": "site_num",
-        "Parameter Code": "parameter_code",
-        "Arithmetic Mean": "pm25_value",
-        "Date Local": "date",
-        "Latitude": "latitude",
-        "Longitude": "longitude",
-        "Local Site Name": "monitor_name",
-        "Units of Measure": "units",
-        "State Code": "state_code",
-        "County Code": "county_code",
-    }
+    # The API repeats each measurement once per pollutant standard version
+    # (1997, 2006, 2012, 2024; annual and 24-hour), so one reading appears
+    # up to 8 times with the same value. Collapse to one row per
+    # site + instrument (POC) + day + sample duration.
+    df = df.drop_duplicates(
+        subset=["site_number", "poc", "date_local", "sample_duration_code"]
+    )
 
-    # Only rename columns that exist in the response
-    existing_columns = {
-        k: v for k, v in column_mapping.items()
-        if k in df.columns
-    }
-    df = df.rename(columns=existing_columns)
+    # If an instrument reports both a 24-hour and an hourly-derived value
+    # for the same day, keep the 24-hour one
+    df = df.assign(
+        _prio=df["sample_duration"].map(SAMPLE_DURATION_PRIORITY).fillna(9)
+    ).sort_values("_prio")
+    df = df.drop_duplicates(subset=["site_number", "poc", "date_local"])
 
-    # Construct monitor_id from state + county + site number
-    # Format: SS-CCC-NNNN (e.g. 06-037-1103)
-    if "site_num" in df.columns:
-        df["monitor_id"] = (
-            state_code + "-" +
-            county_code + "-" +
-            df["site_num"].astype(str).str.zfill(4)
-        )
+    df = df.rename(columns={
+        "arithmetic_mean": "pm25_value",
+        "date_local": "date",
+        "local_site_name": "monitor_name",
+    })
 
-    # Cast numeric columns
-    df["pm25_value"] = pd.to_numeric(df["pm25_value"], errors="coerce")
-    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
-    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+    # One monitor = one site. Format: SS-CCC-NNNN (e.g. 06-037-1103)
+    df["monitor_id"] = (
+        state_code + "-" + county_code + "-" +
+        df["site_number"].astype(str).str.zfill(4)
+    )
+
+    for col in ["pm25_value", "latitude", "longitude"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-    # Filter to only PM2.5 readings
-    # Response may include other parameters if the monitor is co-located
-    if "parameter_code" in df.columns:
-        df = df[df["parameter_code"].astype(str) == PM25_PARAMETER_CODE]
-
-    # Drop rows with missing PM2.5 values
     missing_count = df["pm25_value"].isna().sum()
     if missing_count > 0:
         logger.warning(f"Dropping {missing_count} rows with missing PM2.5 values")
         df = df.dropna(subset=["pm25_value"])
 
-    # Keep only needed columns
-    keep_cols = [
-        "monitor_id", "date", "pm25_value",
-        "latitude", "longitude", "monitor_name",
-    ]
-    keep_cols = [c for c in keep_cols if c in df.columns]
-    df = df[keep_cols]
+    # Sites with several instruments (POCs): average them into one daily
+    # value per site, so each day counts once in the weekly summary
+    df = (
+        df.groupby(["monitor_id", "date"], as_index=False)
+        .agg(
+            pm25_value=("pm25_value", "mean"),
+            latitude=("latitude", "first"),
+            longitude=("longitude", "first"),
+            monitor_name=("monitor_name", "first"),
+        )
+    )
 
     return df
 
@@ -560,8 +577,10 @@ def _request_with_retry(
         except requests.exceptions.HTTPError as e:
             if e.response.status_code < 500:
                 # 4xx — bad request, don't retry
+                # Log without the URL: it contains the email and key
                 logger.error(
-                    f"EPA AQS client error {e.response.status_code}: {e}"
+                    f"EPA AQS client error {e.response.status_code} "
+                    f"(check EPA_AQS_EMAIL / EPA_AQS_KEY in .env)"
                 )
                 raise
 

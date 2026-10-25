@@ -78,7 +78,7 @@ epa_aqs:
   state_code: "06"
   county_code: "037"
   parameter_code: "88101"   # PM2.5 fine particulate matter
-  monitor_count: 11         # verified regulatory monitors in LA County
+  monitor_count: 8          # sites reporting 88101 in AQS (verified Oct 2026)
 
 # Google Earth Engine parameters
 # Collection ID for Landsat 9 surface temperature product.
