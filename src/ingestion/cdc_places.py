@@ -16,7 +16,9 @@ diabetes, and 37 other health measures. These are used as:
 
 Data source:
     CDC PLACES API (Socrata): https://data.cdc.gov/resource/cwsq-ngmh.json
-    Vintage: 2025 release (2023 BRFSS data)
+    Vintage: 2025 release (2023 BRFSS data for all measures used here).
+    Uses 2020 tract boundaries, so GEOIDs match census_tiger.py. Tracts
+    with almost no residents (24 in LA) have no PLACES estimates.
     Geography: census tract level, all 50 states
 
 Output:
@@ -92,7 +94,7 @@ def pull_health_outcomes(config: dict[str, Any]) -> pd.DataFrame:
     >>> config = load_config("los_angeles")
     >>> df = pull_health_outcomes(config)
     >>> len(df)
-    2310
+    2474
     >>> df.columns.tolist()
     ['geoid', 'asthma_pct', 'heart_disease_pct', 'copd_pct', ...]
     """
@@ -103,7 +105,7 @@ def pull_health_outcomes(config: dict[str, Any]) -> pd.DataFrame:
     logger.info(f"Pulling CDC PLACES health outcomes for {city} (state FIPS: {state_fips})")
 
     # Step 1 — Fetch raw data from Socrata API
-    raw_df = _fetch_places_data(state_fips, config)
+    raw_df = _fetch_places_data(full_fips, config)
     logger.info(f"Retrieved {len(raw_df):,} raw records from CDC PLACES API")
 
     # Step 2 — Filter to county and pivot to wide format
@@ -126,7 +128,7 @@ def pull_health_outcomes(config: dict[str, Any]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _fetch_places_data(
-    state_fips: str,
+    full_fips: str,
     config: dict[str, Any],
 ) -> pd.DataFrame:
     """
@@ -138,8 +140,8 @@ def _fetch_places_data(
 
     Parameters
     ----------
-    state_fips : str
-        2-digit state FIPS — filters to one state's tracts.
+    full_fips : str
+        5-digit county FIPS — filters to one county's tracts.
     config : dict
         Pipeline config containing Socrata app token.
 
@@ -162,13 +164,16 @@ def _fetch_places_data(
     measure_list = "', '".join(HEALTH_MEASURES.keys())
     where_clause = (
         f"stateabbr IS NOT NULL "
-        f"AND locationid LIKE '{state_fips}%' "
+        f"AND locationid LIKE '{full_fips}%' "
         f"AND measureid IN ('{measure_list}')"
     )
 
     params = {
         "$where": where_clause,
-        "$select": "locationid,measureid,data_value,low_confidence_limit,high_confidence_limit",
+        "$select": "locationid,measureid,year,data_value,low_confidence_limit,high_confidence_limit",
+        # Without a fixed sort order, Socrata can return overlapping or
+        # missing rows across pages
+        "$order": "locationid,measureid,year",
         "$limit": PAGE_SIZE,
         "$offset": 0,
     }
@@ -200,7 +205,7 @@ def _fetch_places_data(
         time.sleep(delay)
 
     if not all_records:
-        logger.warning(f"No CDC PLACES records returned for state FIPS {state_fips}")
+        logger.warning(f"No CDC PLACES records returned for county FIPS {full_fips}")
         return pd.DataFrame()
 
     return pd.DataFrame(all_records)
@@ -252,6 +257,15 @@ def _process_places_data(
         county_df["data_value"],
         errors="coerce",
     )
+
+    # A release can mix survey years across measures (the 2025 release has
+    # 2022 and 2023 rows). Keep only the latest year per tract and measure,
+    # so the pivot below never averages two different years together.
+    if "year" in county_df.columns:
+        county_df = (
+            county_df.sort_values("year")
+            .drop_duplicates(subset=["locationid", "measureid"], keep="last")
+        )
 
     # Pivot from long to wide format
     # index=locationid (tract GEOID)
