@@ -96,7 +96,9 @@ healthcare:
   primary_care_catchment_minutes: 20
   er_count: 63              # Illinois Health Facilities and Services Review
                             # Board licensed acute care hospitals with EDs
-                            # in Cook County — verify at runtime via HIFLD
+                            # in Cook County
+  hospital_source: null     # TODO: Illinois source (IDPH) — not implemented yet
+  ed_only: true
 
 # -----------------------------------------------------------------------------
 # COMPOUND BURDEN INDEX THRESHOLDS

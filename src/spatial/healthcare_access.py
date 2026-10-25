@@ -19,7 +19,7 @@ Method: Enhanced 2SFCA with Gaussian decay
 
 Input:
     BigQuery: tract_geometries (centroids + population)
-    BigQuery: hifld_hospitals (hospital locations + beds)
+    Table: hospitals (locations, beds, ED status; src/ingestion/hospitals.py)
     OSMnx: road network for city bounding box
 
 Output:
@@ -222,20 +222,28 @@ def _load_tract_data(config: dict[str, Any]) -> pd.DataFrame:
 
 
 def _load_hospital_data(config: dict[str, Any]) -> pd.DataFrame:
-    """Load hospital locations and bed counts from BigQuery."""
+    """
+    Load hospital locations and bed counts.
+
+    With healthcare.ed_only (default true), only hospitals with a licensed
+    on-site emergency department count as supply: heat illness and
+    smoke-related emergencies are treated through EDs, so a rehab or
+    long-term care hospital's beds shouldn't raise a tract's ER access.
+    """
+    ed_filter = "AND has_ed" if config["healthcare"].get("ed_only", True) else ""
     df = read_query(
         f"""
         SELECT hospital_id, name, latitude, longitude, beds
-        FROM {{dataset}}.hifld_hospitals
+        FROM {{dataset}}.hospitals
         WHERE city_fips = '{config["full_fips"]}'
             AND latitude IS NOT NULL
             AND longitude IS NOT NULL
+            {ed_filter}
         ORDER BY hospital_id
         """,
         config,
     )
-    # Fill missing bed count with city median
-    # HIFLD sometimes has -999 for suppressed bed counts
+    # Guard against missing or non-positive bed counts: fill with the median
     df["beds"] = pd.to_numeric(df["beds"], errors="coerce")
     df.loc[df["beds"] <= 0, "beds"] = np.nan
     median_beds = df["beds"].median()

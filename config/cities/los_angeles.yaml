@@ -106,9 +106,10 @@ osmnx:
 healthcare:
   er_catchment_minutes: 30
   primary_care_catchment_minutes: 20
-  er_count: 76    # HASC 2025: all licensed EDs including non-911 facilities
-                  # LA County EMS 2024 report lists 69 nine-one-1 receiving
-                  # hospitals — we use 76 as it covers full public ER access
+  er_count: 70    # CDPH licensed on-site EDs (basic/comprehensive/standby), Oct 2026.
+                  # LA County EMS lists 69 hospitals receiving 911 patients.
+  hospital_source: "cdph_ca"   # California CDPH licensed facility listing (monthly)
+  ed_only: true                # access score counts hospitals with an ED only
 
 # -----------------------------------------------------------------------------
 # COMPOUND BURDEN INDEX THRESHOLDS

@@ -6,5 +6,5 @@ Each module pulls from one external data source and writes to BigQuery:
     epa_aqs.py         — PM2.5 monitor readings (EPA AQS API)
     gee_lst.py         — Landsat LST rasters (Google Earth Engine)
     cdc_places.py      — Health outcome rates (CDC PLACES Socrata)
-    hifld_hospitals.py — Hospital locations (HIFLD open data)
+    hospitals.py       — Hospital locations, beds, ED status (CA: CDPH licensing data)
 """

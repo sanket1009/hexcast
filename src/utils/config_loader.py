@@ -97,6 +97,8 @@ class HealthcareConfig(BaseModel):
     er_catchment_minutes: int
     primary_care_catchment_minutes: int
     er_count: int
+    hospital_source: str | None = None  # e.g. "cdph_ca"; see src/ingestion/hospitals.py
+    ed_only: bool = True                # access score uses hospitals with an ED only
 
 
 class BurdenThresholdsConfig(BaseModel):
