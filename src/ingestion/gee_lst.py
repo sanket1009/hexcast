@@ -1,7 +1,7 @@
 """
 gee_lst.py
 ==========
-Pull Landsat 9 Land Surface Temperature (LST) rasters from
+Pull Landsat 8 + 9 Land Surface Temperature (LST) rasters from
 Google Earth Engine for the configured city and week.
 
 LST is the heat signal in the compound burden index — it captures
@@ -12,22 +12,37 @@ The output GeoTIFF is read by src/spatial/lst_processing.py which
 computes mean LST per census tract polygon.
 
 Data source:
-    Google Earth Engine: LANDSAT/LC09/C02/T1_L2
+    Google Earth Engine: LANDSAT/LC08/C02/T1_L2 + LANDSAT/LC09/C02/T1_L2
     Band: ST_B10 (thermal infrared → land surface temperature)
     Resolution: 30 meters per pixel
-    Revisit: every 16 days per satellite
+    Revisit: 16 days per satellite, 8 days combined
+
+Compositing window:
+    A single week rarely has a clear pass over the whole county (LA
+    spans two satellite paths, and coastal fog is common in early
+    summer). Each week's raster is therefore a median of all clear
+    pixels in the trailing gee.composite_window_days (default 32)
+    ending on the last day of the week.
 
 Output:
-    GeoTIFF saved to GCS: rasters/lst/{fips}_{week_start}.tif
-    - Single band: LST in Celsius
+    GeoTIFF at rasters/lst/{fips}_{week_start}.tif in the object store
+    (GCS bucket, or the local folder in storage.backend: local)
+    - Single band: LST in Celsius, float32, NaN = no clear pixel
     - CRS: EPSG:4326
     - Clipped to city bounding box
+
+Delivery:
+    gcp   -> Earth Engine batch export straight to the GCS bucket
+    local -> the area is split into tiles, each downloaded with
+             getDownloadURL (which caps request size), then mosaicked
 
 Authentication:
     Requires Google Earth Engine account registered at:
     https://signup.earthengine.google.com
     For development: run `earthengine authenticate` in terminal
     For production: use service account credentials in .env
+    Both need GEE_PROJECT_ID in .env: the Cloud project registered for
+    Earth Engine (current earthengine-api requires a project).
 
 Usage:
     from src.ingestion.gee_lst import pull_lst_raster
@@ -39,7 +54,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.utils.gcs import blob_exists, get_gcs_uri
+from src.utils.gcs import blob_exists, get_gcs_uri, upload_file
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,10 +64,6 @@ logger = get_logger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Landsat 9 Collection 2 Tier 1 Level-2 surface temperature product
-# This is the calibrated, atmospherically corrected product
-# NOT the raw radiance — Level-2 gives us actual surface temperature
-LANDSAT9_COLLECTION = "LANDSAT/LC09/C02/T1_L2"
 
 # Thermal infrared band containing land surface temperature
 # ST_B10 = Surface Temperature Band 10
@@ -60,11 +71,14 @@ LANDSAT9_COLLECTION = "LANDSAT/LC09/C02/T1_L2"
 # We convert to Celsius in the GEE processing script
 LST_BAND = "ST_B10"
 
-# QA_PIXEL band bit flags for cloud masking
-# Bit 3 = cloud shadow
-# Bit 4 = cloud
-# Pixels where these bits are set get masked out
+# QA_PIXEL band bit flags for cloud masking (Landsat Collection 2)
+# Bit 0 = fill, Bit 1 = dilated cloud, Bit 3 = cloud, Bit 4 = cloud shadow
+# Pixels with any of these bits set get masked out
 QA_BAND = "QA_PIXEL"
+QA_MASK_BITS = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 4)
+
+# Placeholder for masked pixels during download; converted to NaN locally
+DOWNLOAD_NODATA = -9999.0
 
 # Scale factor and offset for converting raw DN to Kelvin
 # From Landsat Collection 2 documentation
@@ -170,13 +184,11 @@ def pull_lst_raster(
         end_date=week_end,
     )
 
-    # Step 3 — Export to GCS
-    gcs_uri = _export_to_gcs(
-        image=lst_image,
-        gcs_path=gcs_path,
-        config=config,
-        ee=ee,
-    )
+    # Step 3 — Deliver the raster to the object store
+    if config.get("storage", {}).get("backend", "gcp") == "local":
+        gcs_uri = _download_tiled(image=lst_image, gcs_path=gcs_path, config=config, ee=ee)
+    else:
+        gcs_uri = _export_to_gcs(image=lst_image, gcs_path=gcs_path, config=config, ee=ee)
 
     logger.info(f"LST raster export complete: {gcs_uri}")
 
@@ -223,14 +235,22 @@ def _authenticate_gee(config: dict[str, Any]) -> None:
 
     sa_email = config["secrets"].get("GEE_SERVICE_ACCOUNT", "")
     sa_key_path = config["secrets"].get("GEE_PRIVATE_KEY_PATH", "")
+    project = config["secrets"].get("GEE_PROJECT_ID", "")
+    if not project:
+        raise RuntimeError(
+            "GEE_PROJECT_ID is not set in .env. Use the ID of the Cloud project "
+            "registered for Earth Engine (console.cloud.google.com, project picker)."
+        )
 
-    if sa_email and sa_key_path and sa_key_path != "/tmp/fake-gee-key.json":
+    # Only try the service account when its key file actually exists
+    # (the .env template ships a placeholder path)
+    if sa_email and sa_key_path and Path(sa_key_path).expanduser().is_file():
         # Production: service account authentication
         # Does not require browser interaction — works in Docker/Airflow
         logger.debug(f"Authenticating GEE with service account: {sa_email}")
         try:
             credentials = ee.ServiceAccountCredentials(sa_email, sa_key_path)
-            ee.Initialize(credentials)
+            ee.Initialize(credentials, project=project)
             logger.debug("GEE service account authentication successful")
             return
         except Exception as e:
@@ -240,8 +260,8 @@ def _authenticate_gee(config: dict[str, Any]) -> None:
     # These are cached in ~/.config/earthengine/credentials
     logger.debug("Authenticating GEE with default credentials")
     try:
-        ee.Initialize()
-        logger.debug("GEE default authentication successful")
+        ee.Initialize(project=project)
+        logger.debug(f"GEE default authentication successful (project {project})")
     except Exception as e:
         raise RuntimeError(
             f"GEE authentication failed: {e}\n"
@@ -286,97 +306,69 @@ def _build_lst_composite(
     import ee
 
     bbox = config["bbox"]
-    cloud_max = config["gee"]["cloud_cover_max"]
+    gee_cfg = config["gee"]
+    cloud_max = gee_cfg["cloud_cover_max"]
+    window_days = gee_cfg["composite_window_days"]
 
-    # Define city bounding box as GEE geometry
-    # GEE expects coordinates as [west, south, east, north]
     city_bounds = ee.Geometry.Rectangle([
-        bbox["west"],
-        bbox["south"],
-        bbox["east"],
-        bbox["north"],
+        bbox["west"], bbox["south"], bbox["east"], bbox["north"],
     ])
 
-    logger.debug(
-        f"Building LST composite: "
-        f"{start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} "
-        f"cloud_max={cloud_max}%"
-    )
+    # Trailing window ending on the last day of the week.
+    # filterDate's end is exclusive, so stop at the day after week_end.
+    window_end = end_date + timedelta(days=1)
+    window_start = window_end - timedelta(days=window_days)
 
-    # Filter Landsat 9 collection
-    collection = (
-        ee.ImageCollection(LANDSAT9_COLLECTION)
-        .filterBounds(city_bounds)
-        .filterDate(
-            start_date.strftime("%Y-%m-%d"),
-            end_date.strftime("%Y-%m-%d"),
-        )
-        # Filter scenes with too much cloud cover
-        # CLOUD_COVER is a scene-level metadata property
-        # We filter here before pixel-level masking for efficiency
-        .filter(ee.Filter.lte("CLOUD_COVER", cloud_max))
-    )
-
-    # Count available scenes
-    scene_count = collection.size().getInfo()
-    logger.info(f"Found {scene_count} Landsat 9 scenes with cloud cover ≤ {cloud_max}%")
-
-    if scene_count == 0:
-        # No clear scenes this week — use 30-day lookback
-        logger.warning(
-            f"No clear Landsat 9 scenes found for week of "
-            f"{start_date.strftime('%Y-%m-%d')}. "
-            f"Falling back to 30-day composite."
-        )
-        fallback_start = start_date - timedelta(days=30)
-        collection = (
-            ee.ImageCollection(LANDSAT9_COLLECTION)
+    collection = None
+    for coll_id in gee_cfg["collections"]:
+        c = (
+            ee.ImageCollection(coll_id)
             .filterBounds(city_bounds)
-            .filterDate(
-                fallback_start.strftime("%Y-%m-%d"),
-                end_date.strftime("%Y-%m-%d"),
-            )
+            .filterDate(window_start.strftime("%Y-%m-%d"), window_end.strftime("%Y-%m-%d"))
             .filter(ee.Filter.lte("CLOUD_COVER", cloud_max))
         )
-        scene_count = collection.size().getInfo()
-        logger.info(f"30-day fallback: found {scene_count} scenes")
+        logger.info(f"{coll_id}: {c.size().getInfo()} scenes with cloud cover <= {cloud_max}%")
+        collection = c if collection is None else collection.merge(c)
 
-    # Apply cloud mask and convert to Celsius to each scene
-    def process_scene(image):
-        """Apply cloud mask and convert LST band to Celsius."""
-        # Cloud mask using QA_PIXEL band
-        # Bit 3 = cloud shadow, Bit 4 = cloud
-        # bitwiseAnd extracts specific bits from the QA band
-        qa = image.select(QA_BAND)
-        cloud_shadow_bit = 1 << 3    # bit 3
-        cloud_bit = 1 << 4           # bit 4
-
-        # Create mask: 1 = clear pixel, 0 = cloudy pixel
-        cloud_mask = (
-            qa.bitwiseAnd(cloud_shadow_bit).eq(0)
-            .And(qa.bitwiseAnd(cloud_bit).eq(0))
+    scene_count = collection.size().getInfo()
+    logger.info(
+        f"Compositing {scene_count} scenes from "
+        f"{window_start.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} "
+        f"({window_days}-day window)"
+    )
+    if scene_count == 0:
+        raise RuntimeError(
+            f"No Landsat scenes under {cloud_max}% cloud in the {window_days}-day "
+            f"window ending {end_date.strftime('%Y-%m-%d')}. Widen "
+            f"gee.composite_window_days or raise gee.cloud_cover_max."
         )
 
-        # Select thermal band and apply scale + offset
-        # Raw DN → Kelvin → Celsius
-        lst_kelvin = (
+    def process_scene(image):
+        """Mask fill/cloud/shadow pixels and convert ST_B10 to Celsius."""
+        qa = image.select(QA_BAND)
+        clear = qa.bitwiseAnd(QA_MASK_BITS).eq(0)
+        lst_celsius = (
             image.select(LST_BAND)
             .multiply(LST_SCALE)
             .add(LST_OFFSET)
+            .add(KELVIN_TO_CELSIUS)
+            .rename("lst_celsius")
         )
-        lst_celsius = lst_kelvin.add(KELVIN_TO_CELSIUS)
+        return lst_celsius.updateMask(clear)
 
-        # Apply cloud mask — masked pixels become NoData
-        return lst_celsius.updateMask(cloud_mask)
+    composite = collection.map(process_scene).median().clip(city_bounds)
 
-    processed = collection.map(process_scene)
-
-    # Compute median composite
-    # Each output pixel = median of all valid (unmasked) pixels
-    # across all scenes in the collection
-    composite = processed.median().clip(city_bounds)
-
-    logger.debug("LST composite built successfully")
+    # Share of the bbox with at least one clear pixel (sampled at 300 m)
+    stats = composite.mask().reduceRegion(
+        reducer=ee.Reducer.mean(), geometry=city_bounds, scale=300, maxPixels=1e9
+    ).getInfo()
+    coverage = float(stats.get("lst_celsius") or 0.0)
+    logger.info(f"Clear-pixel coverage of the bbox: {coverage:.1%}")
+    if coverage < gee_cfg["min_coverage"]:
+        logger.warning(
+            f"Only {coverage:.1%} of the area has a clear pixel "
+            f"(threshold {gee_cfg['min_coverage']:.0%}). Tracts in gaps will get NaN LST."
+        )
 
     return composite
 
@@ -476,3 +468,98 @@ def _export_to_gcs(
     raise RuntimeError(
         f"GEE export timed out after {timeout_minutes} minutes: {gcs_path}"
     )
+
+
+def _download_tiled(image, gcs_path: str, config: dict[str, Any], ee) -> str:
+    """
+    Download the composite to the local object store in tiles.
+
+    getDownloadURL caps each request (about 32 MB), and the full LA
+    bbox at 30 m is about 4,800 x 4,200 float pixels (~80 MB). We split
+    the bbox into an n x n grid, download each tile, and mosaic them
+    with rasterio. Masked pixels arrive as DOWNLOAD_NODATA and are
+    written as NaN, which lst_processing.py treats as missing.
+    """
+    import io
+    import numpy as np
+    import rasterio
+    import requests
+    from rasterio.merge import merge
+
+    bbox = config["bbox"]
+    n = config["gee"]["download_tiles"]
+    scale = config["gee"]["scale"]
+
+    image = image.unmask(DOWNLOAD_NODATA).toFloat()
+    xs = np.linspace(bbox["west"], bbox["east"], n + 1)
+    ys = np.linspace(bbox["south"], bbox["north"], n + 1)
+
+    datasets = []
+    try:
+        for i in range(n):
+            for j in range(n):
+                region = ee.Geometry.Rectangle([xs[i], ys[j], xs[i + 1], ys[j + 1]])
+                content = _get_tile_with_retry(image, region, scale, ee, requests)
+                mem = rasterio.MemoryFile(content)
+                datasets.append((mem, mem.open()))
+                logger.info(f"Downloaded LST tile {i * n + j + 1}/{n * n} ({len(content) / 1e6:.1f} MB)")
+
+        mosaic, transform = merge([ds for _, ds in datasets], nodata=DOWNLOAD_NODATA)
+        profile = datasets[0][1].profile
+    finally:
+        for mem, ds in datasets:
+            ds.close()
+            mem.close()
+
+    band = mosaic[0].astype("float32")
+    band[band == DOWNLOAD_NODATA] = np.nan
+
+    local_path = Path("data") / "raw" / "lst_rasters" / Path(gcs_path).name
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    profile.update(
+        driver="GTiff", height=band.shape[0], width=band.shape[1], count=1,
+        dtype="float32", nodata=float("nan"), transform=transform, compress="deflate",
+    )
+    with rasterio.open(local_path, "w", **profile) as dst:
+        dst.write(band, 1)
+
+    valid = np.isfinite(band)
+    logger.info(
+        f"Mosaic {band.shape[1]} x {band.shape[0]} px, {valid.mean():.1%} valid, "
+        f"LST {np.nanmin(band):.1f} to {np.nanmax(band):.1f} C (median {np.nanmedian(band):.1f})"
+    )
+    return upload_file(local_path, config, gcs_path=gcs_path)
+
+
+def _get_tile_with_retry(image, region, scale: int, ee, requests, max_attempts: int = 5) -> bytes:
+    """
+    Download one tile, retrying on Earth Engine's transient errors.
+
+    Earth Engine computes each tile on demand and returns 429 (too many
+    requests) or 5xx (overloaded) under load. Those are temporary, so we
+    wait and retry with exponential backoff: 5 s, 10 s, 20 s, 40 s.
+    Other errors (bad region, auth) fail immediately.
+    """
+    retryable = {429, 500, 502, 503, 504}
+    for attempt in range(1, max_attempts + 1):
+        # A fresh URL each attempt: the server-side computation is re-queued
+        url = image.getDownloadURL({
+            "region": region,
+            "scale": scale,
+            "crs": "EPSG:4326",
+            "format": "GEO_TIFF",
+        })
+        try:
+            resp = requests.get(url, timeout=300)
+            if resp.status_code not in retryable:
+                resp.raise_for_status()
+                return resp.content
+            reason = f"HTTP {resp.status_code}"
+        except requests.exceptions.ConnectionError as e:
+            reason = f"connection error: {e}"
+
+        if attempt == max_attempts:
+            raise RuntimeError(f"LST tile download failed after {max_attempts} attempts ({reason})")
+        wait = 5 * 2 ** (attempt - 1)
+        logger.warning(f"Tile download {reason}; retry {attempt}/{max_attempts - 1} in {wait}s")
+        time.sleep(wait)

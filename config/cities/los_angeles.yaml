@@ -86,10 +86,15 @@ epa_aqs:
 # Cloud cover threshold: skip any satellite image with >20% cloud cover
 # because clouds contaminate LST readings with cold false values.
 gee:
-  collection: "LANDSAT/LC09/C02/T1_L2"
+  collections:              # Landsat 8 + 9 Collection 2 Level-2 (8-day combined revisit)
+    - "LANDSAT/LC08/C02/T1_L2"
+    - "LANDSAT/LC09/C02/T1_L2"
   scale: 30                 # meters per pixel
   cloud_cover_max: 20       # percent — skip cloudy scenes above this threshold
   lst_band: "ST_B10"        # thermal infrared band used to derive LST
+  composite_window_days: 32 # median of clear pixels over the trailing 32 days
+  min_coverage: 0.8         # warn if under 80% of the area has a clear pixel
+  download_tiles: 3         # local mode: 3 x 3 tiles keep each request under the size cap
 
 # OSMnx road network parameters
 # Network type 'drive' = driveable roads only (excludes footpaths, cycleways).

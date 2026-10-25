@@ -80,10 +80,13 @@ class EpaAqsConfig(BaseModel):
 
 class GeeConfig(BaseModel):
     """Google Earth Engine parameters — required for LST ingestion."""
-    collection: str
+    collections: list[str]              # Landsat 8 + 9 Level-2, merged
     scale: int
-    cloud_cover_max: int    
+    cloud_cover_max: int
     lst_band: str
+    composite_window_days: int = 32     # trailing window ending on week end
+    min_coverage: float = 0.8           # warn below this clear-pixel share
+    download_tiles: int = 3             # n x n tiles for local downloads
 
 
 class OsmnxConfig(BaseModel):
@@ -322,6 +325,7 @@ def _load_secrets() -> dict[str, str]:
         "EPA_AQS_EMAIL": "EPA AQS registered email (PM2.5 ingestion)",
         "EPA_AQS_KEY": "EPA AQS API key (PM2.5 ingestion)",
         "CDC_SOCRATA_APP_TOKEN": "Optional CDC PLACES app token (raises rate limit)",
+        "GEE_PROJECT_ID": "Cloud project registered for Earth Engine",
     }
 
     for key, description in required_secrets.items():
