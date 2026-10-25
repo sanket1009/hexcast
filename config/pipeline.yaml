@@ -75,14 +75,23 @@ rag:
   min_chunk_chars: 100
   collection_prefix: policy_docs
   upsert_batch_size: 500
+  # Briefing (briefing.py)
   anthropic:
-    model: "claude-sonnet-4-6"
-    max_tokens: 500
-    temperature: 0
+    model: "claude-haiku-5-5"
+    max_tokens: 2000          # headroom for adaptive thinking plus the JSON
   urgency_levels:
     - "MONITOR"
     - "ELEVATED"
     - "CRITICAL"
+  urgency_thresholds:         # county risk percentile
+    elevated: 80
+    critical: 95
+  briefing_excerpts_per_driver: 3
+  default_vulnerable_group: "vulnerable residents"
+  driver_queries:
+    heat: "actions to protect {group} from extreme heat, such as cooling centers and safer indoor temperatures"
+    air_quality: "actions to protect {group} from wildfire smoke, such as staying indoors and filtering indoor air"
+    # healthcare_access: add a query once the corpus includes a healthcare-access document
 
 logging:
   level: "INFO"

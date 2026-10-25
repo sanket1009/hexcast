@@ -82,8 +82,8 @@ imbalanced-learn==0.13.0   # handle class imbalance in high-risk tract labels
 
 chromadb==1.5.9            # local vector database for policy document storage
 sentence-transformers==4.1.0        # all-MiniLM-L6-v2 embedding model
-anthropic==0.57.0          # Claude API client for briefing generation
-langchain==0.3.25          # document loading and semantic chunking
+anthropic==2.3.0          # Claude API client for briefing generation
+#langchain==0.3.25          # document loading and semantic chunking
 langchain-community==0.3.25         # PDF loaders and text splitters
 pypdf==5.6.0               # PDF parsing for policy document ingestion
 jinja2==3.1.6              # prompt templating for LLM briefing assembly
