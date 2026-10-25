@@ -316,6 +316,7 @@ def _load_secrets() -> dict[str, str]:
         "GCP_SERVICE_ACCOUNT_PATH": "Path to GCP service account JSON key",
         "GEE_SERVICE_ACCOUNT": "Google Earth Engine service account email",
         "GEE_PRIVATE_KEY_PATH": "Path to GEE private key JSON file",
+        "CENSUS_API_KEY": "Census Data API key for ACS demographics",
     }
 
     for key, description in required_secrets.items():

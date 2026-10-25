@@ -43,12 +43,15 @@ logger = get_logger(__name__)
 # Documentation: https://tigerweb.geo.census.gov/arcgis/rest/services
 TIGER_API_BASE = (
     "https://tigerweb.geo.census.gov/arcgis/rest/services"
-    "/TIGERweb/tigerWMS_Census2020/MapServer/8/query"
+    "/TIGERweb/tigerWMS_Census2020/MapServer/6/query"   # layer 6 = Census Tracts
 )
 
 # Census ACS API endpoint for demographic data
-# We pull population per tract to weight spatial lag features
-ACS_API_BASE = "https://api.census.gov/data/2023/acs/acs5"
+# We pull population per tract to weight spatial lag features.
+# 2024 5-year is the latest release (2020-2024) and uses the same
+# 2020 tract boundaries as TIGER, so GEOIDs join one-to-one.
+# Requires a free API key: https://api.census.gov/data/key_signup.html
+ACS_API_BASE = "https://api.census.gov/data/2024/acs/acs5"
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +80,7 @@ def pull_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
         - geometry: tract polygon in EPSG:4326
         - name: tract name
         - aland: land area in square meters
-        - population: total population (from ACS 2023 5-year)
+        - population: total population (from ACS 2024 5-year)
         - median_income: median household income
         - tract_area_km2: computed land area in km²
 
@@ -87,7 +90,7 @@ def pull_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
     >>> config = load_config("los_angeles")
     >>> gdf = pull_tract_geometries(config)
     >>> len(gdf)
-    2310
+    2498
     >>> gdf.columns.tolist()
     ['geoid', 'name', 'aland', 'population', 'median_income',
      'tract_area_km2', 'geometry']
@@ -104,7 +107,9 @@ def pull_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
     logger.info(f"Retrieved {len(gdf):,} census tracts from TIGER API")
 
     # Step 2 — Pull demographic data from ACS API
-    demographics = _fetch_acs_demographics(state_fips, county_fips)
+    demographics = _fetch_acs_demographics(
+        state_fips, county_fips, config["secrets"].get("CENSUS_API_KEY", "")
+    )
     logger.info(f"Retrieved demographics for {len(demographics):,} tracts from ACS API")
 
     # Step 3 — Join demographics to geometries
@@ -168,8 +173,9 @@ def _fetch_tiger_geometries(
     # outFields=* returns all available attribute fields
     # f=geojson returns GeoJSON format (easier to parse than the default)
     params = {
-        "where": f"STATEFP='{state_fips}' AND COUNTYFP='{county_fips}'",
-        "outFields": "GEOID,NAME,ALAND,STATEFP,COUNTYFP,TRACTCE",
+        # Field names on this layer are STATE/COUNTY (not STATEFP/COUNTYFP)
+        "where": f"STATE='{state_fips}' AND COUNTY='{county_fips}'",
+        "outFields": "GEOID,NAME,AREALAND",
         "f": "geojson",
         "returnGeometry": "true",
         "outSR": "4326",          # return coordinates in WGS84 (EPSG:4326)
@@ -203,7 +209,7 @@ def _fetch_tiger_geometries(
     gdf = gdf.rename(columns={
         "geoid": "geoid",
         "name": "name",
-        "aland": "aland",     # land area in square meters
+        "arealand": "aland",  # land area in square meters
     })
 
     # Keep only the columns we need
@@ -217,6 +223,7 @@ def _fetch_tiger_geometries(
 def _fetch_acs_demographics(
     state_fips: str,
     county_fips: str,
+    api_key: str,
 ) -> pd.DataFrame:
     """
     Fetch demographic data from the Census ACS 5-year API.
@@ -235,21 +242,37 @@ def _fetch_acs_demographics(
         2-digit state FIPS code.
     county_fips : str
         3-digit county FIPS code.
+    api_key : str
+        Census Data API key (CENSUS_API_KEY in .env).
 
     Returns
     -------
     pd.DataFrame
         DataFrame with columns: geoid, population, median_income
     """
+    if not api_key:
+        raise ValueError(
+            "CENSUS_API_KEY is not set. Get a free key at "
+            "https://api.census.gov/data/key_signup.html and add it to .env"
+        )
     logger.debug("Fetching ACS 5-year demographic data")
 
     params = {
         "get": "B01003_001E,B19013_001E,NAME",
         "for": f"tract:*",
         "in": f"state:{state_fips} county:{county_fips}",
+        "key": api_key,
     }
 
     response = _request_with_retry(ACS_API_BASE, params)
+
+    # A bad or missing key redirects to an HTML page with status 200,
+    # which would otherwise fail later with a confusing JSON error
+    if "missing_key" in response.url or "invalid_key" in response.url:
+        raise ValueError(
+            "Census API rejected the key. Check CENSUS_API_KEY in .env "
+            "(new keys must be activated from the confirmation email)."
+        )
     data = response.json()
 
     # ACS API returns a list where first row is column headers

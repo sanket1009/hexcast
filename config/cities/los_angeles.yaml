@@ -63,7 +63,7 @@ crs_projected: "EPSG:26911"
 # -----------------------------------------------------------------------------
 
 population: 9_690_000       # 9.69M residents — US Census Bureau, March 2026
-census_tract_count: 2300    # approximate — exact count pulled from Census API
+census_tract_count: 2498    # 2020 tract boundaries (TIGER + ACS 2020-2024)
                             # at runtime and stored in BigQuery 
 
 # -----------------------------------------------------------------------------
