@@ -27,7 +27,7 @@ Compositing window:
 Output:
     GeoTIFF at rasters/lst/{fips}_{week_start}.tif in the object store
     (GCS bucket, or the local folder in storage.backend: local)
-    - Single band: LST in Celsius, float32, NaN = no clear pixel
+    - Single band: LST in Celsius, float32, NaN = no clear land pixel (cloud or water)
     - CRS: EPSG:4326
     - Clipped to city bounding box
 
@@ -76,6 +76,11 @@ LST_BAND = "ST_B10"
 # Pixels with any of these bits set get masked out
 QA_BAND = "QA_PIXEL"
 QA_MASK_BITS = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 4)
+
+# Bit 7 = water. Water pixels are masked too: ocean and reservoir surface
+# temperature is not where people live, and ocean pixels inside coastal
+# tract polygons pulled their mean LST down by ~14 °C (June 22, 2026 run)
+QA_WATER_BIT = 1 << 7
 
 # Placeholder for masked pixels during download; converted to NaN locally
 DOWNLOAD_NODATA = -9999.0
@@ -344,9 +349,10 @@ def _build_lst_composite(
         )
 
     def process_scene(image):
-        """Mask fill/cloud/shadow pixels and convert ST_B10 to Celsius."""
+        """Mask fill/cloud/shadow/water pixels and convert ST_B10 to Celsius."""
         qa = image.select(QA_BAND)
         clear = qa.bitwiseAnd(QA_MASK_BITS).eq(0)
+        land = qa.bitwiseAnd(QA_WATER_BIT).eq(0)
         lst_celsius = (
             image.select(LST_BAND)
             .multiply(LST_SCALE)
@@ -354,16 +360,35 @@ def _build_lst_composite(
             .add(KELVIN_TO_CELSIUS)
             .rename("lst_celsius")
         )
-        return lst_celsius.updateMask(clear)
+        return lst_celsius.updateMask(clear.And(land))
 
     composite = collection.map(process_scene).median().clip(city_bounds)
 
-    # Share of the bbox with at least one clear pixel (sampled at 300 m)
-    stats = composite.mask().reduceRegion(
+    # Coverage = share of LAND in the bbox with at least one clear pixel.
+    # Measured over land only, so masked ocean does not read as cloud.
+    # Land = pixels flagged water in under half of their cloud-free
+    # observations; pixels never seen cloud-free count as land (uncovered).
+    def _obs(image):
+        qa = image.select(QA_BAND)
+        clear = qa.bitwiseAnd(QA_MASK_BITS).eq(0)
+        water = qa.bitwiseAnd(QA_WATER_BIT).neq(0).And(clear)
+        return ee.Image.cat([clear.rename("clear"), water.rename("water")])
+
+    obs = collection.map(_obs).sum()
+    water_freq = obs.select("water").divide(obs.select("clear"))
+    land_mask = water_freq.lt(0.5).unmask(1).clip(city_bounds)
+
+    # Apply the same majority-vote land mask to the composite. The per-scene
+    # water bit alone leaks: thin marine-layer stratus over the ocean is
+    # often flagged neither cloud nor water, and those ~19 °C readings
+    # survived into the median for offshore tracts (June 22, 2026 run)
+    composite = composite.updateMask(land_mask)
+
+    stats = composite.mask().updateMask(land_mask).reduceRegion(
         reducer=ee.Reducer.mean(), geometry=city_bounds, scale=300, maxPixels=1e9
     ).getInfo()
     coverage = float(stats.get("lst_celsius") or 0.0)
-    logger.info(f"Clear-pixel coverage of the bbox: {coverage:.1%}")
+    logger.info(f"Clear-pixel coverage of land in the bbox: {coverage:.1%}")
     if coverage < gee_cfg["min_coverage"]:
         logger.warning(
             f"Only {coverage:.1%} of the area has a clear pixel "

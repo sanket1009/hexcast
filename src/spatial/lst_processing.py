@@ -173,7 +173,8 @@ def _load_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
     elif gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs("EPSG:4326")
 
-    return gdf[["geoid", "geometry"]]
+    cols = ["geoid", "aland", "geometry"] if "aland" in gdf.columns else ["geoid", "geometry"]
+    return gdf[cols]
 
 
 def _compute_zonal_stats(
@@ -264,11 +265,27 @@ def _compute_zonal_stats(
     if low_pixel_count > 0:
         logger.warning(
             f"{low_pixel_count} tracts have fewer than {min_pixel_count} "
-            f"valid pixels — setting LST to NaN (cloud cover)"
+            f"valid pixels — setting LST to NaN (no clear land pixels: "
+            f"cloud, water, or outside the raster bbox)"
         )
         for col in ["lst_mean_celsius", "lst_max_celsius", "lst_std"]:
             if col in stats_df.columns:
                 stats_df.loc[low_pixel_mask, col] = np.nan
+
+    # Water-only tracts (Census land area 0) have no land surface to
+    # measure. The satellite water mask leaves a few shoreline pixels in
+    # them (~100 of 200k at 19 °C in the June 22, 2026 run), which would
+    # otherwise skew the city z-score. NaN them on geography, not pixels.
+    if "aland" in tracts_gdf.columns:
+        water_only = (tracts_gdf["aland"].fillna(0).values == 0)
+        if water_only.any():
+            logger.info(
+                f"{water_only.sum()} water-only tracts (land area 0) set to NaN: "
+                + ", ".join(stats_df.loc[water_only, "geoid"])
+            )
+            for col in ["lst_mean_celsius", "lst_max_celsius", "lst_std"]:
+                if col in stats_df.columns:
+                    stats_df.loc[water_only, col] = np.nan
 
     return stats_df
 
