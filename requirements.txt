@@ -39,6 +39,7 @@ osmnx==2.1.1               # road network download + analysis from OpenStreetMap
 networkx==3.5              # graph data structures underlying OSMnx
 h3==4.5.0                  # Uber H3 hexagonal spatial indexing
 pykrige==1.7.3             # Ordinary Kriging for PM2.5 interpolation
+matplotlib==3.11.1         # variogram diagnostic plots
 rasterstats==0.20.0        # zonal statistics — raster summarized by polygon
 rasterio==1.4.3            # raster I/O — read/write GeoTIFF files
 xarray==2026.7.0           # N-dimensional labeled arrays for raster time stacks

@@ -5,16 +5,20 @@ Ordinary Kriging interpolation of PM2.5 from sparse EPA monitor
 locations to all census tract centroids in the configured city.
 
 This module solves the fundamental spatial data problem in the
-compound burden index: EPA has 11 monitors for 2,300 LA County
-census tracts. Most tracts have no nearby monitor. Kriging uses
-the spatial correlation structure of the 11 known readings to
-mathematically estimate PM2.5 at all 2,300 tract centroids.
+compound burden index: LA County has 8 regulatory PM2.5 monitors for
+2,498 census tracts. Kriging learns how PM2.5 similarity decays with
+distance (the variogram) and uses it to estimate every tract centroid.
+Monitors from neighboring counties within a buffer (see epa_aqs.py)
+are included to give the variogram enough pairs and to cover the
+county edges.
 
-Method: Ordinary Kriging (PyKrige)
-  - Fits a spherical variogram to empirical semivariances
-  - Solves the Kriging system for optimal weights
-  - Produces both predictions and variance estimates
-  - Validated with leave-one-out cross-validation
+Method: Ordinary Kriging (PyKrige) with our own variogram fit
+  - Empirical variogram: max lag = half the max pair distance,
+    equal-count bins with >= spatial.kriging_min_pairs_per_bin pairs
+  - Spherical model fit by weighted least squares (weights = pairs)
+  - nugget/psill/range handed to PyKrige as fixed parameters
+  - Variogram plot saved every run (plots/variogram/)
+  - Leave-one-out CV, refitting the variogram in every fold
 
 Why Ordinary Kriging over IDW or Nearest Neighbor:
   - IDW assumes correlation decays with 1/distance — arbitrary
@@ -36,14 +40,19 @@ Usage:
     df = run_kriging(config)
 """
 
+import io
+import warnings
 from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from pykrige.ok import OrdinaryKriging
+from scipy.optimize import OptimizeWarning, curve_fit
+from scipy.spatial.distance import pdist
 
 from src.utils.bigquery import read_query, write_dataframe
+from src.utils.gcs import upload_bytes
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -121,18 +130,27 @@ def run_kriging(
         monitors_df, tracts_df, config
     )
 
-    # Step 4 — Fit Ordinary Kriging model and predict
-    kriged_df = _fit_and_predict(
-        monitors_utm=monitors_utm,
-        tracts_utm=tracts_utm,
-        config=config,
+    # Step 4 — Empirical variogram, weighted spherical fit, plot
+    bins, params = _variogram_for(monitors_utm, config)
+    logger.info(
+        "Empirical variogram bins:\n"
+        + bins.assign(lag_km=(bins["lag_m"] / 1000).round(1))
+              [["lag_km", "semivariance", "n_pairs"]].round(3).to_string(index=False)
     )
+    logger.info(
+        f"Nugget floor from sampling noise: {params['nugget_floor']:.3f}. "
+        f"Fitted spherical variogram: nugget={params['nugget']:.3f}, "
+        f"sill={params['nugget'] + params['psill']:.3f}, "
+        f"range={params['range'] / 1000:.1f} km"
+    )
+    _save_variogram_plot(bins, params, week_str, config)
 
-    # Step 5 — Leave-one-out cross-validation
-    # Validates how well Kriging predicts at unmonitored locations
-    # This is the R² number you put on your resume
-    cv_r2 = _leave_one_out_cv(monitors_utm, config)
-    logger.info(f"Leave-one-out CV R²: {cv_r2:.3f}")
+    # Step 5 — Krige every tract centroid with the fixed variogram
+    kriged_df = _fit_and_predict(monitors_utm, tracts_utm, params)
+
+    # Step 5b — Leave-one-out cross-validation
+    cv = _leave_one_out_cv(monitors_utm, config)
+    cv_r2 = cv["r2"]
 
     # Step 6 — Join GEOID back to kriged predictions
     # tracts_utm still has geoid column — merge on index
@@ -154,7 +172,14 @@ def run_kriging(
     # Step 8 — Add metadata
     result_df["week_start_date"] = week_start.date()
     result_df["city_fips"] = full_fips
-    result_df["cv_r2"] = round(cv_r2, 4)
+    result_df["cv_r2"] = round(cv["r2"], 4)
+    result_df["cv_r2_city"] = round(cv["r2_city"], 4)
+    result_df["cv_mae"] = round(cv["mae"], 4)
+    result_df["n_monitors"] = len(monitors_utm)
+    result_df["variogram_nugget"] = round(params["nugget"], 4)
+    result_df["variogram_nugget_floor"] = round(params["nugget_floor"], 4)
+    result_df["variogram_psill"] = round(params["psill"], 4)
+    result_df["variogram_range_m"] = round(params["range"], 1)
 
     # Step 9 — Validate output
     _validate_output(result_df, len(tracts_df))
@@ -197,14 +222,18 @@ def _load_monitor_readings(
     -------
     pd.DataFrame
         Monitor readings with columns:
-        monitor_id, latitude, longitude, pm25_mean
+        monitor_id, latitude, longitude, pm25_mean, pm25_std,
+        reading_count, in_city
     """
     query = """
         SELECT
             monitor_id,
             latitude,
             longitude,
-            pm25_mean
+            pm25_mean,
+            pm25_std,
+            reading_count,
+            in_city
         FROM {dataset}.epa_pm25_raw
         WHERE
             week_start_date = '{week}'
@@ -348,104 +377,250 @@ def _project_to_utm(
     return monitors_utm, tracts_utm
 
 
-def _fit_and_predict(
-    monitors_utm: pd.DataFrame,
-    tracts_utm: pd.DataFrame,
-    config: dict[str, Any],
+def _empirical_variogram(
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    min_pairs_per_bin: int,
 ) -> pd.DataFrame:
     """
-    Fit Ordinary Kriging model and predict PM2.5 at tract centroids.
+    Compute the empirical variogram from monitor pairs.
 
-    PyKrige's OrdinaryKriging:
-    1. Computes empirical variogram from monitor pairs
-    2. Fits the specified variogram model (spherical by default)
-    3. Solves the Kriging system for optimal weights
-    4. Predicts at each tract centroid with uncertainty estimate
+    For every pair of monitors: distance h between them and
+    semivariance 0.5 * (z_i - z_j)^2. Pairs farther apart than half
+    the maximum pair distance are dropped: long lags are made only of
+    edge-to-edge pairs and are unreliable.
 
-    The spherical variogram model:
-        γ(h) = nugget + (sill-nugget) × [1.5(h/range) - 0.5(h/range)³]
-                for h ≤ range
-        γ(h) = sill    for h > range
-
-    Where h is distance, γ is semivariance.
-
-    Parameters
-    ----------
-    monitors_utm : pd.DataFrame
-        Monitor readings with x_utm, y_utm, pm25_mean columns.
-    tracts_utm : pd.DataFrame
-        Tract centroids with x_utm, y_utm columns.
-    config : dict
-        Pipeline config with Kriging settings.
+    Pairs are then grouped into equal-count bins (quantiles of h)
+    rather than PyKrige's equal-width bins, so every bin holds at
+    least min_pairs_per_bin pairs. Each bin's point is the mean
+    distance and mean semivariance of its pairs.
 
     Returns
     -------
     pd.DataFrame
-        Kriging predictions with columns:
-        pm25_kriged, pm25_kriged_variance
+        One row per bin: lag_m, semivariance, n_pairs.
     """
-    variogram_model = config["spatial"]["kriging_variogram_model"]
-    n_jobs = config["spatial"]["kriging_n_jobs"]
+    coords = np.column_stack([x, y])
+    h = pdist(coords)                                   # meters
+    gamma = 0.5 * pdist(z.reshape(-1, 1), "sqeuclidean")
 
-    logger.info(
-        f"Fitting Ordinary Kriging with variogram_model='{variogram_model}' "
-        f"on {len(monitors_utm)} monitors"
+    max_lag = h.max() / 2
+    keep = h <= max_lag
+    h, gamma = h[keep], gamma[keep]
+
+    n_bins = len(h) // min_pairs_per_bin
+    if n_bins < 3:
+        # A spherical model has 3 parameters; fewer than 3 points
+        # cannot pin it down. Accept smaller bins and say so.
+        n_bins = 3
+        logger.warning(
+            f"Only {len(h)} pairs within max lag; using 3 bins with "
+            f"~{len(h) // 3} pairs each (below {min_pairs_per_bin})"
+        )
+
+    edges = np.quantile(h, np.linspace(0, 1, n_bins + 1))
+    bin_idx = np.clip(np.searchsorted(edges, h, side="right") - 1, 0, n_bins - 1)
+
+    bins = (
+        pd.DataFrame({"bin": bin_idx, "h": h, "gamma": gamma})
+        .groupby("bin")
+        .agg(lag_m=("h", "mean"), semivariance=("gamma", "mean"),
+             n_pairs=("h", "size"))
+        .reset_index(drop=True)
+    )
+    return bins
+
+
+def _spherical(h: np.ndarray, psill: float, range_m: float, nugget: float) -> np.ndarray:
+    """Spherical model, same form PyKrige uses."""
+    r = h / range_m
+    return np.where(
+        h < range_m,
+        nugget + psill * (1.5 * r - 0.5 * r ** 3),
+        nugget + psill,
     )
 
-    # Initialize OrdinaryKriging
-    # x = easting (UTM x), y = northing (UTM y), z = PM2.5 value
-    # variogram_model: how spatial correlation decays with distance
-    # enable_statistics=True: compute prediction variance
-    # verbose=False: suppress PyKrige's internal logging
+
+def _nugget_floor(monitors: pd.DataFrame) -> float:
+    """
+    Smallest nugget the data justifies: the sampling noise of a weekly mean.
+
+    A monitor that samples n of the week's 7 days estimates the weekly
+    mean with variance s^2 / n * (1 - n/7), where s is the day-to-day std.
+    The (1 - n/7) finite population correction makes a full 7-day week
+    exactly 0: it is the weekly mean, not an estimate. Only 1-in-3-day
+    samplers add noise. Averaged over monitors, this is noise present even
+    between two monitors at the same spot, which is what the nugget
+    represents. Instrument error is not included, so this is a minimum.
+
+    The closest variogram bin is ~19 km out, so the fit alone cannot see
+    this and would otherwise collapse the nugget to 0.
+    """
+    days = 7
+    n = monitors["reading_count"].clip(upper=days)
+    var = (monitors["pm25_std"] ** 2 / n) * (1 - n / days)
+    # Full weeks are 0 even when std is missing; a single reading has no
+    # std to estimate from and is left out
+    var = var.where(n < days, 0.0)
+    var = var[var.notna()]
+    return float(var.mean()) if len(var) else 0.0
+
+
+def _fit_variogram(bins: pd.DataFrame, nugget_floor: float = 0.0) -> dict[str, float]:
+    """
+    Fit a spherical model to the binned variogram by weighted least squares.
+
+    Weights = number of pairs per bin, so a bin backed by 40 pairs pulls
+    the curve harder than one backed by 30. curve_fit takes sigma, the
+    per-point standard deviation, so sigma = 1 / sqrt(n_pairs).
+
+    Returns
+    -------
+    dict
+        {"psill", "range", "nugget"} in the form PyKrige accepts.
+    """
+    lag = bins["lag_m"].values
+    sv = bins["semivariance"].values
+
+    # Starting guesses: nugget near the first bin, sill near the top,
+    # range in the middle of the lags
+    # Nugget may not go below the measured sampling noise
+    # (kept under the top bin so the bounds stay valid)
+    floor = min(nugget_floor, sv.max() * 0.9)
+
+    p0 = [max(sv.max() - sv.min(), 1e-6), lag.mean(), max(sv.min() * 0.5, floor * 1.1 + 1e-9)]
+    lower = [0, lag.min() * 0.5, floor]
+    upper = [sv.max() * 3, lag.max() * 3, sv.max()]
+    p0 = [min(max(v, lo + 1e-9), hi - 1e-9) for v, lo, hi in zip(p0, lower, upper)]
+
+    # A parameter resting on its bound (nugget at the floor is expected)
+    # leaves no covariance to estimate; the fit itself is still fine
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", OptimizeWarning)
+        (psill, range_m, nugget), _ = curve_fit(
+            _spherical, lag, sv,
+            p0=p0, bounds=(lower, upper),
+            sigma=1 / np.sqrt(bins["n_pairs"].values),
+            maxfev=10_000,
+        )
+    return {"psill": float(psill), "range": float(range_m), "nugget": float(nugget)}
+
+
+def _save_variogram_plot(
+    bins: pd.DataFrame,
+    params: dict[str, float],
+    week_str: str,
+    config: dict[str, Any],
+) -> str:
+    """
+    Plot the binned variogram and fitted curve; store it as a PNG.
+
+    Dot size = pairs per bin. Goes through upload_bytes, so it lands in
+    data/object_store locally and in the city's bucket on GCP.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.scatter(
+        bins["lag_m"] / 1000, bins["semivariance"],
+        s=bins["n_pairs"] * 4, alpha=0.7, label="Empirical (size = pairs)",
+    )
+    for _, row in bins.iterrows():
+        ax.annotate(int(row["n_pairs"]), (row["lag_m"] / 1000, row["semivariance"]),
+                    textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
+
+    h_line = np.linspace(0, bins["lag_m"].max() * 1.1, 200)
+    ax.plot(h_line / 1000, _spherical(h_line, **{
+        "psill": params["psill"], "range_m": params["range"], "nugget": params["nugget"]
+    }), color="crimson", label="Spherical fit")
+
+    ax.axhline(params["nugget"] + params["psill"], ls=":", color="grey")
+    ax.axvline(params["range"] / 1000, ls=":", color="grey")
+    ax.set_xlabel("Distance between monitors (km)")
+    ax.set_ylabel("Semivariance (μg/m³)²")
+    ax.set_title(
+        f"PM2.5 variogram, {config['city_name']}, week of {week_str}\n"
+        f"nugget={params['nugget']:.2f} (floor {params['nugget_floor']:.2f})  sill={params['nugget'] + params['psill']:.2f}  "
+        f"range={params['range'] / 1000:.1f} km"
+    )
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120)
+    plt.close(fig)
+
+    path = f"plots/variogram/variogram_{week_str}.png"
+    upload_bytes(buf.getvalue(), path, config, content_type="image/png")
+    logger.info(f"Saved variogram plot to {path}")
+    return path
+
+
+def _variogram_for(monitors_utm: pd.DataFrame, config: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, float]]:
+    """Empirical variogram + spherical fit for one set of monitors."""
+    bins = _empirical_variogram(
+        monitors_utm["x_utm"].values,
+        monitors_utm["y_utm"].values,
+        monitors_utm["pm25_mean"].values,
+        config["spatial"].get("kriging_min_pairs_per_bin", 30),
+    )
+    floor = _nugget_floor(monitors_utm)
+    params = _fit_variogram(bins, floor)
+    params["nugget_floor"] = floor
+    return bins, params
+
+
+def _pykrige_params(params: dict[str, float]) -> dict[str, float]:
+    """Only the keys PyKrige's spherical model accepts."""
+    return {k: params[k] for k in ("psill", "range", "nugget")}
+
+
+def _fit_and_predict(
+    monitors_utm: pd.DataFrame,
+    tracts_utm: pd.DataFrame,
+    params: dict[str, float],
+) -> pd.DataFrame:
+    """
+    Ordinary Kriging at tract centroids with a fixed, pre-fitted variogram.
+
+    PyKrige is given our nugget/psill/range instead of fitting its own,
+    so it only solves the Kriging weights. All monitors are used for
+    every tract (21 monitors is small enough for the full system).
+
+    The spherical variogram model:
+        γ(h) = nugget + psill × [1.5(h/range) - 0.5(h/range)³]   h < range
+        γ(h) = nugget + psill                                    h ≥ range
+    """
+    logger.info(f"Kriging {len(tracts_utm):,} tract centroids from {len(monitors_utm)} monitors")
+
     ok = OrdinaryKriging(
         x=monitors_utm["x_utm"].values,
         y=monitors_utm["y_utm"].values,
         z=monitors_utm["pm25_mean"].values,
-        variogram_model=variogram_model,
-        enable_statistics=True,
+        variogram_model="spherical",
+        variogram_parameters=_pykrige_params(params),
         verbose=False,
         enable_plotting=False,
     )
-
-    # Log fitted variogram parameters
-    # These tell you about the spatial structure of PM2.5 in this city
-    # Range tells you how far pollution influence extends
-    logger.info(
-        f"Fitted variogram parameters: "
-        f"nugget={ok.variogram_model_parameters[0]:.4f}, "
-        f"sill={ok.variogram_model_parameters[1]:.4f}, "
-        f"range={ok.variogram_model_parameters[2]:.0f}m"
-    )
-
-    # Predict at all tract centroids
-    # Returns: predictions array, variance array
-    # backend='loop' is more memory efficient than 'vectorized'
-    # for large prediction grids (2,300 tracts)
-    logger.info(f"Predicting PM2.5 at {len(tracts_utm):,} tract centroids...")
 
     pm25_pred, pm25_var = ok.execute(
         "points",
         tracts_utm["x_utm"].values,
         tracts_utm["y_utm"].values,
-        backend="loop",
-        n_closest_points=n_jobs if n_jobs > 0 else None,
+        backend="vectorized",
     )
 
-    # PyKrige returns masked arrays — convert to regular numpy arrays
-    # Masked values (outside variogram range) get filled with NaN
-    pm25_pred = np.array(pm25_pred)
-    pm25_var = np.array(pm25_var)
-
-    # Clip negative predictions to 0 — PM2.5 cannot be negative
-    # Small negative values can occur near the edge of the prediction domain
-    pm25_pred = np.clip(pm25_pred, 0, None)
-    pm25_var = np.clip(pm25_var, 0, None)
+    pm25_pred = np.clip(np.asarray(pm25_pred, dtype=float), 0, None)
+    pm25_var = np.clip(np.asarray(pm25_var, dtype=float), 0, None)
 
     logger.info(
-        f"Kriging predictions complete: "
-        f"mean={pm25_pred.mean():.2f} μg/m³, "
-        f"std={pm25_pred.std():.2f} μg/m³, "
-        f"mean variance={pm25_var.mean():.4f}"
+        f"Kriging predictions: mean={pm25_pred.mean():.2f} μg/m³, "
+        f"std={pm25_pred.std():.2f}, mean variance={pm25_var.mean():.4f}"
     )
 
     return pd.DataFrame({
@@ -457,102 +632,77 @@ def _fit_and_predict(
 def _leave_one_out_cv(
     monitors_utm: pd.DataFrame,
     config: dict[str, Any],
-) -> float:
+) -> dict[str, float]:
     """
-    Validate Kriging accuracy with leave-one-out cross-validation.
+    Leave-one-out cross-validation.
 
-    For each monitor in turn:
-      1. Remove it from the training set
-      2. Fit Kriging on the remaining N-1 monitors
-      3. Predict PM2.5 at the held-out monitor's location
-      4. Compare prediction to actual reading
+    For each monitor: drop it, rebuild the variogram from the remaining
+    monitors with the same binning and fit, Krige at the dropped
+    monitor's location, compare. Refitting per fold keeps the held-out
+    reading out of the variogram too, so the score is honest.
 
-    This simulates how well Kriging predicts at unmonitored locations
-    — which is exactly what we're doing for the 2,300 tract centroids.
-
-    The R² score is your resume number:
-      R²=0.78 means Kriging explains 78% of PM2.5 variance
-      across unmonitored locations using spatial correlation alone.
-
-    Parameters
-    ----------
-    monitors_utm : pd.DataFrame
-        All monitor readings with UTM coordinates.
-    config : dict
-        Pipeline config with Kriging settings.
+    Reported on all monitors and on city monitors only. The city-only
+    numbers describe accuracy where the tracts actually are, but rest
+    on few points (8 in LA), so read them with care.
 
     Returns
     -------
-    float
-        R² score of leave-one-out cross-validation (0.0 to 1.0).
-        Higher is better. Above 0.6 is acceptable for 11 monitors.
+    dict
+        r2, mae, rmse (all monitors), r2_city, mae_city, n_folds.
     """
-    variogram_model = config["spatial"]["kriging_variogram_model"]
-    n_monitors = len(monitors_utm)
+    n = len(monitors_utm)
+    if n < 4:
+        logger.warning(f"Only {n} monitors; LOO-CV needs at least 4. Skipping.")
+        return {"r2": np.nan, "mae": np.nan, "rmse": np.nan,
+                "r2_city": np.nan, "mae_city": np.nan, "n_folds": 0}
 
-    if n_monitors < 4:
-        logger.warning(
-            f"Only {n_monitors} monitors — LOO-CV needs at least 4. "
-            f"Skipping CV."
-        )
-        return float("nan")
-
-    logger.info(f"Running leave-one-out CV on {n_monitors} monitors")
-
-    actuals = []
-    predictions = []
-
-    for i in range(n_monitors):
-        # Create train set: all monitors except monitor i
+    logger.info(f"Running leave-one-out CV on {n} monitors")
+    rows = []
+    for i in range(n):
         train = monitors_utm.drop(index=monitors_utm.index[i])
-
-        # Held-out monitor: monitor i
-        held_out = monitors_utm.iloc[i]
-
+        held = monitors_utm.iloc[i]
         try:
-            # Fit Kriging on N-1 monitors
+            _, params = _variogram_for(train, config)
             ok_cv = OrdinaryKriging(
-                x=train["x_utm"].values,
-                y=train["y_utm"].values,
+                x=train["x_utm"].values, y=train["y_utm"].values,
                 z=train["pm25_mean"].values,
-                variogram_model=variogram_model,
-                verbose=False,
-                enable_plotting=False,
+                variogram_model="spherical", variogram_parameters=_pykrige_params(params),
+                verbose=False, enable_plotting=False,
             )
+            pred, _ = ok_cv.execute("points", np.array([held["x_utm"]]), np.array([held["y_utm"]]))
+            rows.append({"monitor_id": held["monitor_id"], "in_city": bool(held["in_city"]),
+                         "actual": held["pm25_mean"], "pred": float(np.asarray(pred)[0])})
+        except Exception as e:  # one bad fold should not sink the run
+            logger.warning(f"LOO-CV failed for {held['monitor_id']}: {e}")
 
-            # Predict at held-out monitor location
-            pred, _ = ok_cv.execute(
-                "points",
-                np.array([held_out["x_utm"]]),
-                np.array([held_out["y_utm"]]),
-            )
+    cv = pd.DataFrame(rows)
 
-            actuals.append(held_out["pm25_mean"])
-            predictions.append(float(np.array(pred)[0]))
+    def _r2(a, p):
+        ss_tot = np.sum((a - a.mean()) ** 2)
+        return float(1 - np.sum((a - p) ** 2) / ss_tot) if ss_tot > 0 else np.nan
 
-        except Exception as e:
-            logger.warning(f"LOO-CV failed for monitor {i}: {e}")
-            continue
-
-    if len(actuals) < 3:
-        logger.warning("Too few successful CV folds — returning NaN")
-        return float("nan")
-
-    # Compute R² = 1 - SS_residual / SS_total
-    actuals = np.array(actuals)
-    predictions = np.array(predictions)
-
-    ss_res = np.sum((actuals - predictions) ** 2)
-    ss_tot = np.sum((actuals - actuals.mean()) ** 2)
-
-    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+    city = cv[cv["in_city"]]
+    out = {
+        "r2": _r2(cv["actual"], cv["pred"]),
+        "mae": float(np.mean(np.abs(cv["actual"] - cv["pred"]))),
+        "rmse": float(np.sqrt(np.mean((cv["actual"] - cv["pred"]) ** 2))),
+        "r2_city": _r2(city["actual"], city["pred"]) if len(city) >= 3 else np.nan,
+        "mae_city": float(np.mean(np.abs(city["actual"] - city["pred"]))) if len(city) else np.nan,
+        "n_folds": len(cv),
+    }
 
     logger.info(
-        f"LOO-CV complete: R²={r2:.3f}, "
-        f"MAE={np.mean(np.abs(actuals - predictions)):.3f} μg/m³"
+        "LOO-CV per monitor:\n"
+        + cv.assign(error=(cv["pred"] - cv["actual"]).round(2))
+            .round({"pred": 2})
+            .sort_values("error")
+            .to_string(index=False)
     )
-
-    return float(r2)
+    logger.info(
+        f"LOO-CV: R²={out['r2']:.3f}, MAE={out['mae']:.2f}, RMSE={out['rmse']:.2f} μg/m³ "
+        f"(city only: R²={out['r2_city']:.3f}, MAE={out['mae_city']:.2f})"
+    )
+    return out
 
 
 def _validate_output(df: pd.DataFrame, expected_tract_count: int) -> None:

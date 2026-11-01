@@ -36,6 +36,7 @@ bigquery:
 spatial:
   kriging_variogram_model: "spherical"
   kriging_n_jobs: -1
+  kriging_min_pairs_per_bin: 30   # equal-count variogram bins, at least this many monitor pairs each
   h3_resolution: 7
   h3_lag_rings: 2
   lst_zonal_stats:
