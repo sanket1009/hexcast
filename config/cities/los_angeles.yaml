@@ -79,6 +79,11 @@ epa_aqs:
   county_code: "037"
   parameter_code: "88101"   # PM2.5 fine particulate matter
   monitor_count: 8          # sites reporting 88101 in AQS (verified Oct 2026)
+  # Neighbor counties pulled only to support Kriging (more monitor pairs,
+  # monitors on both sides of the county line). 5-digit state+county FIPS.
+  # Orange, Ventura, San Bernardino, Riverside, Kern
+  neighbor_counties: ["06059", "06111", "06071", "06065", "06029"]
+  neighbor_buffer_km: 50    # keep neighbor monitors within 50 km of the LA bbox
 
 # Google Earth Engine parameters
 # Collection ID for Landsat 9 surface temperature product.

@@ -4,6 +4,11 @@ epa_aqs.py
 Pull daily PM2.5 monitor readings from the EPA Air Quality System API
 for the configured city and week.
 
+Monitors from neighboring counties (epa_aqs.neighbor_counties) are pulled
+too and kept if they sit within epa_aqs.neighbor_buffer_km of the city
+bbox. They exist only to give Kriging more monitor pairs and coverage at
+the county edge; in_city marks the city's own monitors.
+
 These readings are the raw input to the Kriging spatial interpolation
 step in src/spatial/kriging.py. Without monitor readings, PM2.5 cannot
 be estimated at unmonitored census tract locations.
@@ -15,8 +20,10 @@ Data source:
 
 Output:
     BigQuery table: epa_pm25_raw
-    Columns: monitor_id, date, pm25_value, latitude, longitude,
-             city_fips, week_start_date
+    Columns: monitor_id, county_fips, in_city, latitude, longitude,
+             pm25_mean/max/min/std, reading_count, city_fips, week_start_date
+    city_fips is the city this run belongs to (all rows); county_fips is
+    where the monitor physically sits.
 
 Usage:
     from src.ingestion.epa_aqs import pull_pm25_readings
@@ -27,10 +34,13 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
+import geopandas as gpd
 import pandas as pd
 import requests
+from shapely.geometry import box
 
 from src.utils.bigquery import write_dataframe
+from src.utils.config_loader import get_bbox_tuple
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -125,9 +135,13 @@ def pull_pm25_readings(
     ...
     """
     city = config["city_name"]
-    state_code = config["epa_aqs"]["state_code"]
-    county_code = config["epa_aqs"]["county_code"]
+    aqs_cfg = config["epa_aqs"]
     full_fips = config["full_fips"]
+
+    # The city county first, then neighbors as (state, county) pairs
+    counties = [(aqs_cfg["state_code"], aqs_cfg["county_code"])] + [
+        (fips[:2], fips[2:]) for fips in aqs_cfg.get("neighbor_counties", [])
+    ]
 
     # Determine the week to pull
     # Default: the 7 days of the most recent complete week
@@ -149,16 +163,26 @@ def pull_pm25_readings(
         year_end = datetime(week_start.year, 12, 31)
         ranges = [(week_start, year_end), (year_end + timedelta(days=1), week_end)]
 
-    parts = [
-        _fetch_daily_readings(
-            state_code=state_code,
-            county_code=county_code,
-            start_date=b,
-            end_date=e,
-            config=config,
-        )
-        for b, e in ranges
-    ]
+    parts = []
+    for state_code, county_code in counties:
+        is_city = state_code + county_code == full_fips
+        for b, e in ranges:
+            try:
+                parts.append(_fetch_daily_readings(
+                    state_code=state_code,
+                    county_code=county_code,
+                    start_date=b,
+                    end_date=e,
+                    config=config,
+                ))
+            except (ValueError, requests.exceptions.RequestException) as err:
+                # The city county is required; a failed neighbor only
+                # thins out Kriging support, so log it and carry on
+                if is_city:
+                    raise
+                logger.warning(
+                    f"Skipping neighbor county {state_code}{county_code}: {err}"
+                )
     daily_df = pd.concat([d for d in parts if not d.empty], ignore_index=True) if any(
         not d.empty for d in parts
     ) else pd.DataFrame()
@@ -180,9 +204,14 @@ def pull_pm25_readings(
     # Step 2 — Aggregate daily readings to weekly summary per monitor
     weekly_df = _aggregate_to_weekly(daily_df, week_start, full_fips)
 
+    # Step 2b — Drop neighbor monitors outside the buffer around the city
+    weekly_df = _filter_to_buffer(weekly_df, config)
+
+    city_rows = weekly_df[weekly_df["in_city"]]
     logger.info(
-        f"Aggregated to {len(weekly_df)} monitor weekly summaries. "
-        f"City mean PM2.5: {weekly_df['pm25_mean'].mean():.2f} μg/m³"
+        f"Aggregated to {len(weekly_df)} monitor weekly summaries "
+        f"({len(city_rows)} in city, {len(weekly_df) - len(city_rows)} neighbor). "
+        f"City mean PM2.5: {city_rows['pm25_mean'].mean():.2f} μg/m³"
     )
 
     # Step 3 — Flag readings above EPA standards
@@ -347,6 +376,7 @@ def _fetch_daily_readings(
         state_code + "-" + county_code + "-" +
         df["site_number"].astype(str).str.zfill(4)
     )
+    df["county_fips"] = state_code + county_code
 
     for col in ["pm25_value", "latitude", "longitude"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -366,6 +396,7 @@ def _fetch_daily_readings(
             latitude=("latitude", "first"),
             longitude=("longitude", "first"),
             monitor_name=("monitor_name", "first"),
+            county_fips=("county_fips", "first"),
         )
     )
 
@@ -416,6 +447,7 @@ def _aggregate_to_weekly(
         latitude=("latitude", "first"),
         longitude=("longitude", "first"),
         monitor_name=("monitor_name", "first"),
+        county_fips=("county_fips", "first"),
     ).reset_index()
 
     # Round PM2.5 values to 2 decimal places
@@ -423,10 +455,58 @@ def _aggregate_to_weekly(
         weekly[col] = weekly[col].round(2)
 
     # Add metadata columns
+    weekly["in_city"] = weekly["county_fips"] == full_fips
     weekly["city_fips"] = full_fips
     weekly["week_start_date"] = week_start.date()
 
     return weekly
+
+
+def _filter_to_buffer(
+    df: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    """
+    Keep city monitors plus neighbor monitors near the city bbox.
+
+    Distance is measured in the city's projected CRS (meters), from each
+    monitor to the bbox rectangle. A monitor inside the bbox is distance 0.
+    City monitors are always kept, even outside the bbox (island sites).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Weekly summary with latitude, longitude, in_city.
+    config : dict
+        Uses bbox, crs, crs_projected, epa_aqs.neighbor_buffer_km.
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered copy with a distance_to_bbox_km column.
+    """
+    buffer_km = config["epa_aqs"].get("neighbor_buffer_km", 0.0)
+
+    points = gpd.GeoSeries(
+        gpd.points_from_xy(df["longitude"], df["latitude"]),
+        crs=config["crs"],
+    ).to_crs(config["crs_projected"])
+    city_box = gpd.GeoSeries(
+        [box(*get_bbox_tuple(config))], crs=config["crs"]
+    ).to_crs(config["crs_projected"]).iloc[0]
+
+    df = df.copy()
+    df["distance_to_bbox_km"] = (points.distance(city_box).values / 1000).round(1)
+
+    keep = df["in_city"] | (df["distance_to_bbox_km"] <= buffer_km)
+    dropped = df[~keep]
+    if not dropped.empty:
+        logger.info(
+            f"Dropped {len(dropped)} neighbor monitors beyond {buffer_km} km: "
+            + ", ".join(dropped["monitor_id"])
+        )
+
+    return df[keep].reset_index(drop=True)
 
 
 def _flag_exceedances(df: pd.DataFrame) -> pd.DataFrame:
@@ -485,9 +565,11 @@ def _validate_output(
     """
     expected_monitors = config["epa_aqs"]["monitor_count"]
 
-    # Check monitor count is close to expected
+    # Check the city's own monitor count is close to expected
     # Allow ±3 because monitors can go offline temporarily
-    actual_monitors = len(df)
+    actual_monitors = int(df["in_city"].sum())
+    if actual_monitors == 0:
+        raise ValueError("No monitors inside the city county this week")
     if abs(actual_monitors - expected_monitors) > 3:
         logger.warning(
             f"Expected ~{expected_monitors} monitors, "

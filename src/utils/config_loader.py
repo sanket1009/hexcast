@@ -75,7 +75,14 @@ class EpaAqsConfig(BaseModel):
     state_code: str
     county_code: str
     parameter_code: str
-    monitor_count: int
+    monitor_count: int          # monitors expected inside the city county
+    # Extra counties pulled only as Kriging support: more monitor pairs for
+    # the variogram, and readings on both sides of the county line.
+    # 5-digit state+county FIPS so a neighbor can sit in another state.
+    neighbor_counties: list[str] = []
+    # Neighbor monitors farther than this from the city bbox are dropped
+    # (different air basin). 0 keeps none.
+    neighbor_buffer_km: float = 0.0
 
 
 class GeeConfig(BaseModel):
