@@ -4,7 +4,7 @@ epa_aqs.py
 Pull daily PM2.5 monitor readings from the EPA Air Quality System API
 for the configured city and week.
 
-Monitors from neighboring counties (epa_aqs.neighbor_counties) are pulled
+Monitors from neighboring counties (top-level neighbor_counties) are pulled
 too and kept if they sit within epa_aqs.neighbor_buffer_km of the city
 bbox. They exist only to give Kriging more monitor pairs and coverage at
 the county edge; in_city marks the city's own monitors.
@@ -140,7 +140,7 @@ def pull_pm25_readings(
 
     # The city county first, then neighbors as (state, county) pairs
     counties = [(aqs_cfg["state_code"], aqs_cfg["county_code"])] + [
-        (fips[:2], fips[2:]) for fips in aqs_cfg.get("neighbor_counties", [])
+        (fips[:2], fips[2:]) for fips in config.get("neighbor_counties", [])
     ]
 
     # Determine the week to pull

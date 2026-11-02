@@ -49,6 +49,11 @@ bbox:
 # would be misaligned. Defining it here ensures consistency across all modules.
 crs: "EPSG:4326"
 
+# Adjacent counties used as buffer data: PM2.5 monitors (Kriging support)
+# and hospitals + population (healthcare access edge effect).
+# 5-digit state+county FIPS. Orange, Ventura, San Bernardino, Riverside, Kern
+neighbor_counties: ["06059", "06111", "06071", "06065", "06029"]
+
 # Projected CRS for operations that require distance in meters (not degrees).
 # EPSG:26911 = UTM Zone 11N — the correct projection for Southern California.
 # We use this for OSMnx network analysis (travel time needs meters, not degrees)
@@ -79,10 +84,6 @@ epa_aqs:
   county_code: "037"
   parameter_code: "88101"   # PM2.5 fine particulate matter
   monitor_count: 8          # sites reporting 88101 in AQS (verified Oct 2026)
-  # Neighbor counties pulled only to support Kriging (more monitor pairs,
-  # monitors on both sides of the county line). 5-digit state+county FIPS.
-  # Orange, Ventura, San Bernardino, Riverside, Kern
-  neighbor_counties: ["06059", "06111", "06071", "06065", "06029"]
   neighbor_buffer_km: 50    # keep neighbor monitors within 50 km of the LA bbox
 
 # Google Earth Engine parameters
@@ -120,6 +121,8 @@ healthcare:
                   # LA County EMS lists 69 hospitals receiving 911 patients.
   hospital_source: "cdph_ca"   # California CDPH licensed facility listing (monthly)
   ed_only: true                # access score counts hospitals with an ED only
+  buffer_km: 30                # hospitals, demand tracts and roads loaded 30 km past the bbox
+  snap_max_m: 2000             # farther than this from a road = unreachable (islands, water tracts)
 
 # -----------------------------------------------------------------------------
 # COMPOUND BURDEN INDEX THRESHOLDS

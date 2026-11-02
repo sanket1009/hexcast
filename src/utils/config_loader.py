@@ -76,11 +76,7 @@ class EpaAqsConfig(BaseModel):
     county_code: str
     parameter_code: str
     monitor_count: int          # monitors expected inside the city county
-    # Extra counties pulled only as Kriging support: more monitor pairs for
-    # the variogram, and readings on both sides of the county line.
-    # 5-digit state+county FIPS so a neighbor can sit in another state.
-    neighbor_counties: list[str] = []
-    # Neighbor monitors farther than this from the city bbox are dropped
+    # Neighbor monitors (counties from top-level neighbor_counties) farther than this from the city bbox are dropped
     # (different air basin). 0 keeps none.
     neighbor_buffer_km: float = 0.0
 
@@ -100,6 +96,10 @@ class OsmnxConfig(BaseModel):
     """OSMnx road network parameters — required for 2SFCA access."""
     network_type: str
     speed_kmh_default: int
+    # Overpass server; None keeps OSMnx's default (overpass-api.de).
+    # Point at a mirror when the main server is overloaded.
+    overpass_url: str | None = None
+    download_retries: int = 5           # attempts, with 1, 2, 4, 8 min waits
 
 
 class HealthcareConfig(BaseModel):
@@ -109,6 +109,12 @@ class HealthcareConfig(BaseModel):
     er_count: int
     hospital_source: str | None = None  # e.g. "cdph_ca"; see src/ingestion/hospitals.py
     ed_only: bool = True                # access score uses hospitals with an ED only
+    # Hospitals, tracts (demand) and roads are loaded this far beyond the
+    # city bbox, so tracts near the county line see the ERs they really use
+    buffer_km: float = 0.0
+    # A tract or hospital farther than this from any road is unreachable
+    # (islands, water-only tracts) instead of snapping to a distant road
+    snap_max_m: float = 2000.0
 
 
 class BurdenThresholdsConfig(BaseModel):
@@ -155,6 +161,10 @@ class CityConfig(BaseModel):
 
     # Geography
     bbox: BboxConfig
+    # Adjacent counties (5-digit state+county FIPS, any state) used as
+    # buffer data: PM2.5 monitors for Kriging, hospitals and population
+    # for healthcare access
+    neighbor_counties: list[str] = []
     crs: str
     crs_projected: str
 
@@ -375,6 +385,24 @@ def get_bbox_tuple(config: dict[str, Any]) -> tuple[float, float, float, float]:
     """
     bbox = config["bbox"]
     return (bbox["west"], bbox["south"], bbox["east"], bbox["north"])
+
+
+def get_buffered_bbox(
+    config: dict[str, Any], buffer_km: float
+) -> tuple[float, float, float, float]:
+    """
+    City bbox grown by buffer_km on every side, as (west, south, east, north).
+
+    Uses 111.32 km per degree of latitude and cos(latitude) for longitude,
+    accurate to well under 1% at city scale.
+    """
+    import math
+
+    west, south, east, north = get_bbox_tuple(config)
+    mid_lat = math.radians((south + north) / 2)
+    dlat = buffer_km / 111.32
+    dlon = buffer_km / (111.32 * math.cos(mid_lat))
+    return (west - dlon, south - dlat, east + dlon, north + dlat)
 
 
 def get_bigquery_dataset(config: dict[str, Any]) -> str:

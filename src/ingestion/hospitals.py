@@ -28,7 +28,15 @@ Output:
     - Object store: hospitals/{fips}.parquet
     - Table: hospitals (one row per licensed general acute care hospital)
       hospital_id, name, address, city, zip, latitude, longitude, beds,
-      ed_level, has_ed, trauma_level, data_date, source, city_fips
+      ed_level, has_ed, trauma_level, data_date, source, county_fips,
+      in_city, city_fips
+
+Buffer hospitals:
+    Hospitals in neighbor_counties inside the bbox grown by
+    healthcare.buffer_km are kept too (in_city = False). Residents near
+    the county line use them, so leaving them out would make border
+    tracts look like ER deserts. city_fips is the city this run belongs
+    to; county_fips is where the hospital is.
 
 Usage:
     from src.ingestion.hospitals import pull_hospital_locations
@@ -44,6 +52,7 @@ import pandas as pd
 import requests
 
 from src.utils.bigquery import write_dataframe
+from src.utils.config_loader import get_buffered_bbox
 from src.utils.gcs import upload_file
 from src.utils.logger import get_logger
 
@@ -114,6 +123,7 @@ def pull_hospital_locations(config: dict[str, Any]) -> gpd.GeoDataFrame:
         geometry=gpd.points_from_xy(df["longitude"], df["latitude"]),
         crs="EPSG:4326",
     )
+    gdf["in_city"] = gdf["county_fips"] == full_fips
     gdf["city_fips"] = full_fips
 
     gdf = _drop_outside_bbox(gdf, config)
@@ -141,15 +151,16 @@ def pull_hospital_locations(config: dict[str, Any]) -> gpd.GeoDataFrame:
 # ---------------------------------------------------------------------------
 
 def _fetch_cdph_ca(config: dict[str, Any]) -> pd.DataFrame:
-    """Licensed general acute care hospitals in the county, with ED level."""
+    """Licensed general acute care hospitals in the city and neighbor counties."""
     full_fips = config["full_fips"]
+    counties = [full_fips] + list(config.get("neighbor_counties", []))
 
     facilities = _download_ckan_csv(CDPH_LOCATIONS_RESOURCE)
     services = _download_ckan_csv(CDPH_SERVICES_RESOURCE)
     logger.info(f"Downloaded {len(facilities):,} CDPH facilities, {len(services):,} service rows")
 
     df = facilities[
-        (facilities["FIPS_COUNTY_CODE"] == full_fips)
+        facilities["FIPS_COUNTY_CODE"].isin(counties)
         & (facilities["FAC_FDR"].str.upper() == GENERAL_ACUTE_CARE)
     ].copy()
     n_all = len(df)
@@ -198,6 +209,7 @@ def _fetch_cdph_ca(config: dict[str, Any]) -> pd.DataFrame:
         "trauma_level": df["TRAUMA_CTR"].fillna("None"),
         "data_date": df["DATA_DATE"],
         "source": "cdph_ca",
+        "county_fips": df["FIPS_COUNTY_CODE"],
     }).sort_values("hospital_id").reset_index(drop=True)
 
 
@@ -232,35 +244,43 @@ def _validate_output(gdf: gpd.GeoDataFrame, config: dict[str, Any]) -> None:
     if gdf["hospital_id"].duplicated().any():
         raise ValueError("Duplicate hospital_id values")
 
+    if not gdf["in_city"].any():
+        raise ValueError("No hospitals inside the city county")
+
     expected = config["healthcare"]["er_count"]
-    actual_ed = int(gdf["has_ed"].sum())
+    city = gdf[gdf["in_city"]]
+    actual_ed = int(city["has_ed"].sum())
     if abs(actual_ed - expected) > 10:
         logger.warning(f"Expected ~{expected} hospitals with an ED, found {actual_ed}")
 
     logger.info(
-        f"Validation passed: {len(gdf)} hospitals, {actual_ed} with an ED, "
-        f"{int((gdf['trauma_level'] != 'None').sum())} trauma centers"
+        f"Validation passed: {len(city)} city hospitals ({actual_ed} with an ED), "
+        f"{len(gdf) - len(city)} buffer hospitals "
+        f"({int(gdf.loc[~gdf['in_city'], 'has_ed'].sum())} with an ED)"
     )
 
 
 def _drop_outside_bbox(gdf: gpd.GeoDataFrame, config: dict[str, Any]) -> gpd.GeoDataFrame:
     """
-    Drop hospitals outside the city bounding box.
+    Drop hospitals outside the buffered city bounding box.
 
-    The access model downloads the road network for the bbox only. A
-    hospital outside it would snap to the nearest road inside, creating
-    access that doesn't exist. In LA this is Catalina Island Medical
-    Center (offshore, in the county but outside the mainland bbox).
+    The access model downloads the road network for the buffered bbox
+    only. A hospital outside it would snap to the nearest road inside,
+    creating access that doesn't exist. In LA this drops Catalina Island
+    Medical Center (offshore) and far parts of the neighbor counties.
     """
-    bbox = config["bbox"]
+    west, south, east, north = get_buffered_bbox(
+        config, config["healthcare"].get("buffer_km", 0.0)
+    )
     inside = (
-        gdf["longitude"].between(bbox["west"], bbox["east"])
-        & gdf["latitude"].between(bbox["south"], bbox["north"])
+        gdf["longitude"].between(west, east)
+        & gdf["latitude"].between(south, north)
     )
     if (~inside).any():
-        logger.warning(
-            f"Dropping {int((~inside).sum())} hospital(s) outside the city bbox "
-            f"(unreachable by the road network): {gdf.loc[~inside, 'name'].tolist()}"
+        dropped_city = gdf.loc[~inside & gdf["in_city"], "name"].tolist()
+        logger.info(
+            f"Dropping {int((~inside).sum())} hospital(s) outside the buffered bbox"
+            + (f"; in-city: {dropped_city}" if dropped_city else "")
         )
     return gdf[inside].reset_index(drop=True)
 

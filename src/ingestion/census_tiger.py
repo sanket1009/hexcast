@@ -139,6 +139,71 @@ def pull_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
     return gdf
 
 
+def pull_buffer_tracts(config: dict[str, Any]) -> pd.DataFrame:
+    """
+    Pull population and centroids for neighbor-county tracts near the city.
+
+    These are demand only for the healthcare access model: a hospital just
+    outside the county also serves the people on its side of the line, so
+    leaving them out would make that hospital look emptier than it is.
+    They are not scored and stay out of tract_geometries, so every other
+    module still sees city tracts only.
+
+    Keeps tracts in config neighbor_counties whose centroid falls inside
+    the bbox grown by healthcare.buffer_km.
+
+    Output table: buffer_tracts
+        geoid, county_fips, population, centroid_lat, centroid_lon, city_fips
+    """
+    from src.utils.config_loader import get_buffered_bbox
+
+    neighbors = config.get("neighbor_counties", [])
+    buffer_km = config["healthcare"].get("buffer_km", 0.0)
+    if not neighbors or buffer_km <= 0:
+        logger.info("No neighbor counties or buffer configured; skipping buffer tracts")
+        return pd.DataFrame()
+
+    west, south, east, north = get_buffered_bbox(config, buffer_km)
+    api_key = config["secrets"].get("CENSUS_API_KEY", "")
+    parts = []
+
+    for fips in neighbors:
+        state_fips, county_fips = fips[:2], fips[2:]
+        gdf = _fetch_tiger_geometries(state_fips, county_fips)
+        demo = _fetch_acs_demographics(state_fips, county_fips, api_key)
+        gdf = gdf.merge(demo[["geoid", "population"]], on="geoid", how="left")
+
+        cent = gdf.to_crs(config["crs_projected"]).geometry.centroid.to_crs("EPSG:4326")
+        gdf["centroid_lon"], gdf["centroid_lat"] = cent.x, cent.y
+
+        inside = (
+            gdf["centroid_lon"].between(west, east)
+            & gdf["centroid_lat"].between(south, north)
+        )
+        kept = gdf[inside]
+        logger.info(
+            f"Buffer tracts {fips}: kept {len(kept)} of {len(gdf)}, "
+            f"population {kept['population'].sum():,.0f}"
+        )
+        parts.append(pd.DataFrame({
+            "geoid": kept["geoid"],
+            "county_fips": fips,
+            "population": kept["population"],
+            "centroid_lat": kept["centroid_lat"],
+            "centroid_lon": kept["centroid_lon"],
+        }))
+
+    df = pd.concat(parts, ignore_index=True)
+    df["city_fips"] = config["full_fips"]
+
+    write_dataframe(df, "buffer_tracts", config, write_disposition="WRITE_TRUNCATE")
+    logger.info(
+        f"Buffer tracts complete: {len(df):,} tracts, "
+        f"population {df['population'].sum():,.0f} within {buffer_km} km"
+    )
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
