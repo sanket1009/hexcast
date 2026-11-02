@@ -241,18 +241,19 @@ def write_dataframe(
         logger.warning(f"DataFrame is empty — skipping write to {table_name}")
         return
 
-    # Construct full table reference
-    project_id = config["secrets"]["GCP_PROJECT_ID"]
-    dataset = config["gcp"]["bigquery_dataset"]
-    full_table_id = f"{project_id}.{dataset}.{table_name}"
-
     # Use write disposition from config if not explicitly provided
     if write_disposition is None:
         write_disposition = config["bigquery"]["write_disposition"]
 
+    # Local backend needs no GCP project; check it before reading secrets
     if _is_local(config):
         _local_write(df, table_name, config, write_disposition)
         return
+
+    # Construct full table reference (GCP only)
+    project_id = config["secrets"]["GCP_PROJECT_ID"]
+    dataset = config["gcp"]["bigquery_dataset"]
+    full_table_id = f"{project_id}.{dataset}.{table_name}"
 
     logger.info(f"Writing {len(df):,} rows to {full_table_id}")
     logger.debug(f"Write disposition: {write_disposition}")
