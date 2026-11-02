@@ -44,7 +44,7 @@ import pandas as pd
 from esda.getisord import G_Local
 from esda.moran import Moran
 
-from src.utils.bigquery import read_query, write_dataframe
+from src.utils.bigquery import REPLACE_PARTITION, read_query, write_dataframe
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -131,6 +131,7 @@ def detect_hotspots(
         scores_df["compound_score"].values,
         W,
         scores_df["geoid"].values,
+        config,
     )
     logger.info(
         f"Gi* complete: "
@@ -154,7 +155,10 @@ def detect_hotspots(
 
     # Step 9 — Validate and write
     _validate_output(result_df, config)
-    write_dataframe(result_df, "hotspot_detection", config)
+    write_dataframe(
+        result_df, "hotspot_detection", config,
+        write_disposition=REPLACE_PARTITION,
+    )
 
     hotspot_99 = (result_df["hotspot_class"] == "HOTSPOT_99").sum()
     hotspot_95 = (result_df["hotspot_class"] == "HOTSPOT_95").sum()
@@ -235,8 +239,9 @@ def _build_spatial_weights(
     """
     Build row-standardized queen contiguity spatial weights matrix.
 
-    Same weights construction as compound_score.py.
-    Row-standardization required for both Moran's I and Gi*.
+    compound_score no longer uses spatial weights (PCA was removed), so
+    this module owns the weights. Row-standardization is required for
+    both Moran's I and Gi*.
     """
     W = libpysal.weights.Queen.from_dataframe(
         tracts_gdf,
@@ -296,11 +301,12 @@ def _compute_morans_i(
         f"(seed={random_seed})"
     )
 
+    # esda seeds permutations from NumPy's global generator, not a seed argument
+    np.random.seed(random_seed)
     moran = Moran(
         scores,
         W,
         permutations=n_permutations,
-        seed=random_seed,
     )
 
     return float(moran.I), float(moran.p_sim)
@@ -310,6 +316,7 @@ def _compute_gi_star(
     scores: np.ndarray,
     W: libpysal.weights.W,
     geoids: np.ndarray,
+    config: dict[str, Any],
 ) -> pd.DataFrame:
     """
     Compute Local Getis-Ord Gi* statistic for each tract.
@@ -345,6 +352,8 @@ def _compute_gi_star(
         Spatial weights matrix.
     geoids : np.ndarray
         Tract GEOIDs, aligned to W.
+    config : dict
+        Pipeline config. Reads hotspot_significance (standard, high).
 
     Returns
     -------
@@ -368,8 +377,8 @@ def _compute_gi_star(
 
     # Classify hotspot significance level
     # Using analytical p-values from normal distribution
-    standard_sig = config_significance = 0.05
-    high_sig = 0.01
+    standard_sig = config["hotspot_significance"]["standard"]
+    high_sig = config["hotspot_significance"]["high"]
 
     hotspot_classes = []
     for z, p in zip(gi.Zs, gi.p_norm):
