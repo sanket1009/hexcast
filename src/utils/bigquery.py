@@ -32,6 +32,7 @@ Storage backends:
 from pathlib import Path
 from typing import Any, Optional
 import pandas as pd
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
@@ -187,6 +188,104 @@ def get_client(config: dict[str, Any]) -> bigquery.Client:
 # Write operations
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Partition overwrite (REPLACE_PARTITION)
+# ---------------------------------------------------------------------------
+# Re-running a week must replace that week's rows, not append to them.
+# REPLACE_PARTITION deletes rows for each (week_start_date, city_fips) pair
+# in the incoming DataFrame, then inserts the new rows, in one transaction.
+# Other weeks and cities are left alone.
+
+REPLACE_PARTITION = "REPLACE_PARTITION"
+PARTITION_KEYS = ["week_start_date", "city_fips"]
+
+
+def _partition_values(df: pd.DataFrame) -> list[tuple]:
+    """Distinct (week_start_date, city_fips) pairs in df: the partitions to overwrite."""
+    missing = [k for k in PARTITION_KEYS if k not in df.columns]
+    if missing:
+        raise ValueError(f"REPLACE_PARTITION needs columns {missing} in the DataFrame")
+    pairs = df[PARTITION_KEYS].drop_duplicates()
+    return [tuple(row) for row in pairs.itertuples(index=False, name=None)]
+
+
+def _local_replace_partition(df: pd.DataFrame, table_name: str, config: dict[str, Any]) -> None:
+    """DuckDB: delete the incoming partitions, insert the new rows, one transaction."""
+    schema = _local_schema(config)
+    full_table = f'"{schema}"."{table_name}"'
+    keys = _partition_values(df)
+
+    con = _local_connect(config)
+    try:
+        con.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        con.register("incoming_df", df)
+
+        if not _local_table_exists(con, schema, table_name):
+            con.execute(f"CREATE TABLE {full_table} AS SELECT * FROM incoming_df")
+        else:
+            con.execute("BEGIN TRANSACTION")
+            try:
+                for week, city in keys:
+                    con.execute(
+                        f"DELETE FROM {full_table} WHERE week_start_date = ? AND city_fips = ?",
+                        [week, city],
+                    )
+                con.execute(f"INSERT INTO {full_table} BY NAME SELECT * FROM incoming_df")
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
+    finally:
+        con.close()
+
+    logger.info(
+        f"Replaced {len(keys)} partition(s) in local {full_table} with {len(df):,} rows"
+    )
+
+
+def _gcp_replace_partition(df: pd.DataFrame, full_table_id: str, client: bigquery.Client) -> None:
+    """
+    BigQuery: load to a staging table, then delete matching partitions and
+    insert from staging in one multi-statement transaction.
+
+    The staging table uses the target's schema, so types line up with the
+    target. The first write to a new table is a plain append (no delete).
+    """
+    _partition_values(df)  # validates the key columns exist
+    staging_id = f"{full_table_id}_staging"
+    target = client.get_table(full_table_id)
+
+    load_config = bigquery.LoadJobConfig(
+        write_disposition="WRITE_TRUNCATE",
+        schema=target.schema,
+    )
+    client.load_table_from_dataframe(df, staging_id, job_config=load_config).result()
+
+    cols = ", ".join(f"`{c}`" for c in df.columns)
+    sql = f"""
+    BEGIN TRANSACTION;
+    DELETE FROM `{full_table_id}` AS t
+    WHERE EXISTS (
+        SELECT 1 FROM `{staging_id}` AS s
+        WHERE s.week_start_date = t.week_start_date
+          AND s.city_fips = t.city_fips
+    );
+    INSERT INTO `{full_table_id}` ({cols})
+    SELECT {cols} FROM `{staging_id}`;
+    COMMIT TRANSACTION;
+    """
+    client.query(sql).result()
+    client.delete_table(staging_id, not_found_ok=True)
+
+
+def _gcp_table_exists(client: bigquery.Client, full_table_id: str) -> bool:
+    try:
+        client.get_table(full_table_id)
+        return True
+    except NotFound:
+        return False
+
+
 def write_dataframe(
     df: pd.DataFrame,
     table_name: str,
@@ -219,6 +318,8 @@ def write_dataframe(
         "WRITE_APPEND"   — add new rows (default, for weekly updates)
         "WRITE_TRUNCATE" — delete all existing rows first (full reload)
         "WRITE_EMPTY"    — fail if table already has data
+        "REPLACE_PARTITION" — delete rows for each (week_start_date, city_fips)
+            in df, then insert df. Re-runs replace a week instead of duplicating it.
         If None, reads from config["bigquery"]["write_disposition"].
 
     Returns
@@ -247,7 +348,10 @@ def write_dataframe(
 
     # Local backend needs no GCP project; check it before reading secrets
     if _is_local(config):
-        _local_write(df, table_name, config, write_disposition)
+        if write_disposition == REPLACE_PARTITION:
+            _local_replace_partition(df, table_name, config)
+        else:
+            _local_write(df, table_name, config, write_disposition)
         return
 
     # Construct full table reference (GCP only)
@@ -260,6 +364,13 @@ def write_dataframe(
     logger.debug(f"Columns: {list(df.columns)}")
 
     client = get_client(config)
+
+    if write_disposition == REPLACE_PARTITION:
+        if _gcp_table_exists(client, full_table_id):
+            _gcp_replace_partition(df, full_table_id, client)
+            logger.info(f"Replaced partitions in {full_table_id} with {len(df):,} rows")
+            return
+        write_disposition = "WRITE_APPEND"  # first write creates the table
 
     # Configure the load job
     job_config = bigquery.LoadJobConfig(

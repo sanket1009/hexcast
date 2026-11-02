@@ -52,7 +52,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.utils.bigquery import read_query, write_dataframe
+from src.utils.bigquery import REPLACE_PARTITION, read_query, write_dataframe
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -128,7 +128,11 @@ def compute_compound_score(
 
     # Step 8 — Validate and write
     _validate_output(scores_df, signals_df)
-    write_dataframe(scores_df, "compound_scores", config)
+    # Replace this week's rows for this city; re-runs do not duplicate
+    write_dataframe(
+        scores_df, "compound_scores", config,
+        write_disposition=REPLACE_PARTITION,
+    )
 
     high_risk = scores_df["burden_class"].isin(["HIGH", "CRITICAL"]).sum()
     critical = (scores_df["burden_class"] == "CRITICAL").sum()
