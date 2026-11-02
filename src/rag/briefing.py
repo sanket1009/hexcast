@@ -8,7 +8,7 @@ excerpts from retriever.py, asks Claude for a briefing that matches a
 fixed schema, then verifies every citation in code.
 
 Design:
-    - Urgency is set by code from percentile thresholds, never by the LLM
+    - Urgency is set by the pipeline from the burden class, never by the LLM
     - One retrieval query per risk driver (config: driver_queries)
     - Structured outputs (Pydantic schema) guarantee valid JSON
     - Actions citing no real excerpt are dropped
@@ -52,7 +52,8 @@ class BriefingError(Exception):
 @dataclass(frozen=True)
 class TractRisk:
     geoid: str
-    risk_percentile: float           # 0-100, position within the county
+    risk_percentile: float           # 0-100, position within the county (record only)
+    urgency: str                     # one of urgency_levels, set from burden_class
     drivers: list[str]               # risk domains, keys of driver_queries
     indicators: dict[str, float]     # plain-language metric name -> value
     vulnerable_groups: list[str] = field(default_factory=list)  # e.g. ["older adults"], set by the pipeline
@@ -134,7 +135,6 @@ class BriefingGenerator:
         self.model = rag_cfg["anthropic"]["model"]
         self.max_tokens = rag_cfg["anthropic"]["max_tokens"]
         self.levels = rag_cfg["urgency_levels"]
-        self.thresholds = rag_cfg["urgency_thresholds"]
         self.driver_queries = rag_cfg["driver_queries"]
         self.per_driver = rag_cfg["briefing_excerpts_per_driver"]
         self.default_group = rag_cfg["default_vulnerable_group"]
@@ -147,7 +147,9 @@ class BriefingGenerator:
         self.client = client or anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
 
     def generate(self, tract: TractRisk) -> Briefing:
-        urgency = self._urgency(tract.risk_percentile)
+        urgency = tract.urgency
+        if urgency not in self.levels:
+            raise ValueError(f"Tract {tract.geoid}: urgency {urgency!r} not in {self.levels}")
         chunks = self._retrieve(tract)
         excerpts = {f"E{i}": c for i, c in enumerate(chunks, start=1)}
 
@@ -192,15 +194,6 @@ class BriefingGenerator:
         )
 
     # -- helpers ------------------------------------------------------------
-
-    def _urgency(self, percentile: float) -> str:
-        """Deterministic: same percentile, same urgency, every run."""
-        monitor, elevated, critical = self.levels
-        if percentile >= self.thresholds["critical"]:
-            return critical
-        if percentile >= self.thresholds["elevated"]:
-            return elevated
-        return monitor
 
     def _retrieve(self, tract: TractRisk) -> list[RetrievedChunk]:
         """

@@ -91,9 +91,7 @@ rag:
     - "MONITOR"
     - "ELEVATED"
     - "CRITICAL"
-  urgency_thresholds:         # county risk percentile
-    elevated: 80
-    critical: 95
+  # urgency comes from burden_class (see burden_percentiles in the city config)
   briefing_excerpts_per_driver: 3
   default_vulnerable_group: "vulnerable residents"
   driver_queries:
