@@ -19,7 +19,7 @@ import os
 import sys
 
 import pandas as pd
-from google.api_core.exceptions import NotFound
+from google.cloud import bigquery
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -56,7 +56,9 @@ def main() -> int:
     project = config["secrets"]["GCP_PROJECT_ID"]
     table_id = f"{project}.{SCRATCH_DATASET}.{TABLE}"
 
-    client.create_dataset(f"{project}.{SCRATCH_DATASET}", location="US", exists_ok=True)
+    dataset = bigquery.Dataset(f"{project}.{SCRATCH_DATASET}")
+    dataset.location = "US"
+    client.create_dataset(dataset, exists_ok=True)
     client.delete_table(table_id, not_found_ok=True)
 
     def count(week: str | None = None) -> int:
