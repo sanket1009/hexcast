@@ -139,19 +139,19 @@ healthcare:
 # These define what counts as "high risk" for operational decisions.
 # -----------------------------------------------------------------------------
 
-# Compound burden score runs 0.0 to 1.0 after Spatial PCA + normalization.
-# A tract scoring above high_risk_threshold triggers:
-#   - inclusion in the Gi* hotspot analysis
-#   - LLM briefing generation
-#   - alert in the Streamlit dashboard
-# A tract scoring above critical_threshold triggers:
-#   - CRITICAL urgency_level in the LLM briefing
-#   - immediate flag for intervention
-# These thresholds are operationally defined — not statistically derived.
-# They can be tuned after seeing the actual score distribution in Week 2.
-burden_thresholds:
-  high_risk: 0.75
-  critical: 0.90
+# Compound burden score: signed z-score composite (compound_score.py).
+# compound_score is min-max scaled 0-1 for display. Classes come from the
+# city percentile of raw burden, so they hold steady when one tract is an outlier.
+# A tract at or above a cutoff gets that class:
+#   critical  -> CRITICAL urgency, immediate intervention flag, Gi* 99% cluster
+#   high_risk -> HIGH, Gi* hotspot inclusion, LLM briefing generation, dashboard alert
+#   elevated  -> ELEVATED, monitor
+# Percentiles are set by policy, not by the data. Tune after reviewing the first
+# real weekly distribution.
+burden_percentiles:
+  elevated: 50     # top half of the city
+  high_risk: 75    # top quarter
+  critical: 90     # top tenth
 
 # Gi* significance levels for hotspot detection.
 # 0.05 = 95% confidence (standard in public health research)
