@@ -96,8 +96,11 @@ class OsmnxConfig(BaseModel):
     """OSMnx road network parameters — required for 2SFCA access."""
     network_type: str
     speed_kmh_default: int
-    # Overpass server; None keeps OSMnx's default (overpass-api.de).
-    # Point at a mirror when the main server is overloaded.
+    # Where the road network comes from: "geofabrik" (regional .osm.pbf
+    # extract, filtered locally; no rate limits) or "overpass" (live API)
+    road_source: str = "overpass"
+    geofabrik_url: str | None = None    # required when road_source is geofabrik
+    # Overpass server; None keeps OSMnx's default (overpass-api.de)
     overpass_url: str | None = None
     download_retries: int = 5           # attempts, with 1, 2, 4, 8 min waits
 

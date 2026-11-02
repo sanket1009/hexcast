@@ -37,6 +37,7 @@ esda==2.6.0                # Moran's I, Gi* hotspot detection
 mgwr==2.2.1                # Geographically Weighted Regression
 osmnx==2.1.1               # road network download + analysis from OpenStreetMap
 networkx==3.5              # graph data structures underlying OSMnx
+osmium==4.3.2              # pyosmium: filter Geofabrik .osm.pbf extracts to the drive network
 h3==4.5.0                  # Uber H3 hexagonal spatial indexing
 pykrige==1.7.3             # Ordinary Kriging for PM2.5 interpolation
 matplotlib==3.11.1         # variogram diagnostic plots

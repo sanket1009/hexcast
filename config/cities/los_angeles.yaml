@@ -108,6 +108,14 @@ gee:
 osmnx:
   network_type: "drive"
   speed_kmh_default: 40     # default speed where OSM has no speed limit tagged
+  # Road network source. The buffered LA area needs 13 Overpass sub-queries;
+  # overpass-api.de refused and the kumi.systems mirror timed out on them
+  # (Nov 1-2, 2026). Geofabrik's daily SoCal extract is one plain download,
+  # filtered locally with OSMnx's "drive" rules (src/utils/osm_extract.py).
+  # Only used when the cached graph in data/processed/road_network/ is
+  # missing or refresh_network=True.
+  road_source: "geofabrik"
+  geofabrik_url: "https://download.geofabrik.de/north-america/us/california/socal-latest.osm.pbf"
 
 # Healthcare facility parameters
 # 2SFCA catchment thresholds: how far (in minutes) we consider
@@ -122,7 +130,9 @@ healthcare:
   hospital_source: "cdph_ca"   # California CDPH licensed facility listing (monthly)
   ed_only: true                # access score counts hospitals with an ED only
   buffer_km: 30                # hospitals, demand tracts and roads loaded 30 km past the bbox
-  snap_max_m: 2000             # farther than this from a road = unreachable (islands, water tracts)
+  snap_max_m: 5000             # farther than this from a road = unreachable. Islands are 40+ km
+                               # off; the population center of tract 930400 (1,489 km2 of Angeles
+                               # National Forest, 1,212 people) falls 2.8 km from a road
 
 # -----------------------------------------------------------------------------
 # COMPOUND BURDEN INDEX THRESHOLDS

@@ -57,6 +57,7 @@ Usage:
     df = compute_2sfca(config)
 """
 
+import io
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -66,10 +67,12 @@ import networkx as nx
 import numpy as np
 import osmnx as ox
 import pandas as pd
+import requests
 
 from src.utils.bigquery import read_query, table_exists, write_dataframe
 from src.utils.config_loader import get_buffered_bbox
 from src.utils.logger import get_logger
+from src.utils.osm_extract import graph_from_extract
 
 logger = get_logger(__name__)
 
@@ -83,6 +86,18 @@ PER_RESIDENTS = 1_000
 
 # Road networks change slowly; reuse the downloaded graph across runs
 NETWORK_CACHE_DIR = Path("data") / "processed" / "road_network"
+
+# Census Bureau 2020 Centers of Population by tract: where residents
+# actually live within each tract. Matches the 2020 tract boundaries used
+# by TIGER and ACS 2020-2024. One file per state.
+CENPOP_URL = (
+    "https://www2.census.gov/geo/docs/reference/cenpop2020/tract/"
+    "CenPop2020_Mean_TR{state}.txt"
+)
+CENPOP_DIR = Path("data") / "raw" / "census"
+
+# Geofabrik extracts and the intermediate filtered XML (kept out of git)
+OSM_EXTRACT_DIR = Path("data") / "raw" / "osm"
 
 # OSMnx caches each finished Overpass sub-query here, so a retry after a
 # server error resumes instead of starting over (kept out of git under data/)
@@ -138,15 +153,17 @@ def compute_2sfca(
     # Step 3 — Road network for the buffered bbox (cached)
     G = _get_road_network(config, refresh=refresh_network)
 
-    # Step 4 — Snap to the network; far-off points are unreachable
+    # Step 4 — Snap to the strongly connected core; far-off points are unreachable
+    G_core = _strong_core(G)
     tracts_df["node"], tracts_df["snap_distance_m"] = _snap_to_network(
-        G, tracts_df["centroid_lon"].values, tracts_df["centroid_lat"].values
+        G_core, tracts_df["centroid_lon"].values, tracts_df["centroid_lat"].values
     )
     tracts_df["reachable"] = tracts_df["snap_distance_m"] <= snap_max_m
 
     hospitals_df["node"], hospitals_df["snap_distance_m"] = _snap_to_network(
-        G, hospitals_df["longitude"].values, hospitals_df["latitude"].values
+        G_core, hospitals_df["longitude"].values, hospitals_df["latitude"].values
     )
+    del G_core
     far = hospitals_df["snap_distance_m"] > snap_max_m
     if far.any():
         logger.warning(
@@ -236,6 +253,7 @@ def _load_demand_tracts(config: dict[str, Any]) -> pd.DataFrame:
         )
 
     df = pd.concat(parts, ignore_index=True)
+    df = _apply_population_centroids(df)
     df["population"] = pd.to_numeric(df["population"], errors="coerce")
     missing = df["population"].isna() & df["in_city"]
     if missing.any():
@@ -249,6 +267,47 @@ def _load_demand_tracts(config: dict[str, Any]) -> pd.DataFrame:
         f"({df.loc[~df['in_city'], 'population'].sum():,.0f} people)"
     )
     return df
+
+
+def _apply_population_centroids(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Move each tract's origin from its geometric centroid to its 2020
+    population-weighted center, where Census publishes one.
+
+    Large rural tracts have geometric centroids in empty mountains or
+    desert, kilometers from any road and from where residents live. In LA
+    that made five populated mainland tracts (about 19,000 people) look
+    unreachable. Population centers are the standard origin in
+    accessibility studies. Tracts missing from the file keep the
+    geometric centroid.
+    """
+    states = sorted({g[:2] for g in df["geoid"]})
+    frames = []
+    for st in states:
+        path = CENPOP_DIR / f"CenPop2020_Mean_TR{st}.txt"
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            resp = requests.get(CENPOP_URL.format(state=st), timeout=60)
+            resp.raise_for_status()
+            path.write_bytes(resp.content)
+            logger.info(f"Downloaded Census 2020 tract population centers for state {st}")
+        cp = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+        frames.append(pd.DataFrame({
+            "geoid": cp["STATEFP"] + cp["COUNTYFP"] + cp["TRACTCE"],
+            "pop_lat": pd.to_numeric(cp["LATITUDE"]),
+            "pop_lon": pd.to_numeric(cp["LONGITUDE"]),
+        }))
+    centers = pd.concat(frames, ignore_index=True)
+
+    df = df.merge(centers, on="geoid", how="left")
+    has = df["pop_lat"].notna()
+    df.loc[has, "centroid_lat"] = df.loc[has, "pop_lat"]
+    df.loc[has, "centroid_lon"] = df.loc[has, "pop_lon"]
+    logger.info(
+        f"Origins: population-weighted centers for {int(has.sum()):,} of {len(df):,} tracts"
+        + (f"; {int((~has).sum())} keep geometric centroids" if (~has).any() else "")
+    )
+    return df.drop(columns=["pop_lat", "pop_lon"])
 
 
 def _load_hospital_data(config: dict[str, Any]) -> pd.DataFrame:
@@ -306,12 +365,23 @@ def _get_road_network(config: dict[str, Any], refresh: bool = False) -> nx.Multi
         G = ox.load_graphml(path)
     else:
         west, south, east, north = get_buffered_bbox(config, buffer_km)
+        bbox = (west, south, east, north)
+        source = config["osmnx"].get("road_source", "overpass")
         logger.info(
-            f"Downloading OSM '{network_type}' network for buffered bbox "
-            f"W{west:.3f} S{south:.3f} E{east:.3f} N{north:.3f}. "
-            f"First download takes a while (large area)."
+            f"Building OSM '{network_type}' network from {source} for buffered bbox "
+            f"W{west:.3f} S{south:.3f} E{east:.3f} N{north:.3f}"
         )
-        G = _download_with_retry(config, (west, south, east, north), network_type)
+        if source == "geofabrik":
+            if network_type != "drive":
+                raise ValueError("road_source 'geofabrik' implements the 'drive' filter only")
+            url = config["osmnx"].get("geofabrik_url")
+            if not url:
+                raise ValueError("osmnx.geofabrik_url is required when road_source is 'geofabrik'")
+            G = graph_from_extract(url, bbox, OSM_EXTRACT_DIR, refresh=refresh)
+        elif source == "overpass":
+            G = _download_with_retry(config, bbox, network_type)
+        else:
+            raise ValueError(f"Unknown osmnx.road_source '{source}' (use 'geofabrik' or 'overpass')")
         # Speed from OSM maxspeed tags; untagged roads get the mean of their
         # highway type, then the configured fallback
         G = ox.add_edge_speeds(G, fallback=config["osmnx"]["speed_kmh_default"])
@@ -368,6 +438,26 @@ def _download_with_retry(
                 f"{cached} sub-queries cached so far. Retrying in {wait // 60} min..."
             )
             time.sleep(wait)
+
+
+def _strong_core(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """
+    View of the largest strongly connected component.
+
+    The network keeps the largest WEAKLY connected component, so some nodes
+    can be entered but not left by car (end of a one-way spur, an exit-only
+    driveway) or left but not entered. A tract snapped to such a node gets
+    no route to any hospital and scores as an ER desert by accident (seen
+    in Long Beach tract 577501). Snapping only to nodes in the strongly
+    connected core guarantees a route both ways. Travel times still use
+    the full network.
+    """
+    core = max(nx.strongly_connected_components(G), key=len)
+    logger.info(
+        f"Snapping to strongly connected core: {len(core):,} of "
+        f"{G.number_of_nodes():,} nodes ({len(core) / G.number_of_nodes():.1%})"
+    )
+    return G.subgraph(core)
 
 
 def _snap_to_network(
