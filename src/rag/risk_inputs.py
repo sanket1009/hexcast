@@ -64,8 +64,13 @@ def build_tract_risks(config: dict[str, Any], week_str: str) -> list[TractRisk]:
     for col in DRIVER_COMPONENTS.values():
         scores[f"{col}_pct"] = scores[col].rank(pct=True)
 
+    # Rank 1 = highest burden. The prompt gets a rank, not a percentile, so the
+    # model cannot write "100th percentile" for a tract at 99.8.
+    scores["burden_rank"] = scores["burden_percentile"].rank(ascending=False, method="min").astype(int)
+    tract_count = len(scores)
+
     targets = scores[scores["burden_class"].isin(URGENCY_BY_CLASS)]
-    risks = [_to_tract_risk(row, config) for _, row in targets.iterrows()]
+    risks = [_to_tract_risk(row, config, tract_count) for _, row in targets.iterrows()]
 
     logger.info(
         f"Built {len(risks)} briefing inputs "
@@ -109,7 +114,7 @@ def _load_week(config: dict[str, Any], week_str: str) -> pd.DataFrame:
     return read_query(query, config)
 
 
-def _to_tract_risk(row: pd.Series, config: dict[str, Any]) -> TractRisk:
+def _to_tract_risk(row: pd.Series, config: dict[str, Any], tract_count: int) -> TractRisk:
     drivers = [
         name for name, col in DRIVER_COMPONENTS.items()
         if row[f"{col}_pct"] >= TOP_QUARTILE
@@ -118,15 +123,17 @@ def _to_tract_risk(row: pd.Series, config: dict[str, Any]) -> TractRisk:
         # Fallback: the single highest component, so every briefing has a driver
         drivers = [max(DRIVER_COMPONENTS, key=lambda n: row[DRIVER_COMPONENTS[n]])]
 
+    # Round for the prompt: raw floats like 55.610474406949436 read badly
     indicators = {
-        label: float(row[col])
+        label: round(float(row[col]), 2)
         for label, col in INDICATORS.items()
         if pd.notna(row[col])
     }
 
     return TractRisk(
         geoid=row["geoid"],
-        risk_percentile=float(row["burden_percentile"]),
+        risk_rank=int(row["burden_rank"]),
+        tract_count=tract_count,
         urgency=URGENCY_BY_CLASS[row["burden_class"]],
         drivers=drivers,
         indicators=indicators,

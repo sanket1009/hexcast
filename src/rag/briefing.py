@@ -20,7 +20,8 @@ Usage:
     generator = BriefingGenerator(config)
     briefing = generator.generate(TractRisk(
         geoid="06037206020",
-        risk_percentile=96.0,
+        risk_rank=3,
+        tract_count=2475,
         drivers=["heat", "air_quality"],
         indicators={"Days above 95F (next 7 days)": 4},
     ))
@@ -52,7 +53,8 @@ class BriefingError(Exception):
 @dataclass(frozen=True)
 class TractRisk:
     geoid: str
-    risk_percentile: float           # 0-100, position within the county (record only)
+    risk_rank: int                   # 1 = highest burden in the city (record only)
+    tract_count: int                 # tracts ranked in the same city and week
     urgency: str                     # one of urgency_levels, set from burden_class
     drivers: list[str]               # risk domains, keys of driver_queries
     indicators: dict[str, float]     # plain-language metric name -> value
@@ -247,7 +249,7 @@ class BriefingGenerator:
         return (
             f"Tract: {tract.geoid}\n"
             f"Urgency level: {urgency}\n"
-            f"Risk percentile within the county: {tract.risk_percentile:.0f}\n"
+            f"Burden rank: {tract.risk_rank} of {tract.tract_count} city tracts (1 = highest burden)\n"
             f"Main risk drivers: {', '.join(tract.drivers)}\n"
             f"Vulnerable groups in this tract: {groups_line}\n"
             f"Indicators:\n{indicator_lines}\n\n"
