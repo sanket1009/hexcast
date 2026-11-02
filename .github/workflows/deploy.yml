@@ -20,9 +20,14 @@ name: Deploy to Cloud Run
 # Trigger: only on pushes to main
 # This means: only deploy reviewed, approved, merged code
 # Never deploy directly from feature branches
+#
+# Currently manual only (Actions tab -> Run workflow). Restore the push
+# trigger below once src/serving/api.py exists and the GCP secrets
+# (GCP_PROJECT_ID, GCP_SERVICE_ACCOUNT_KEY, GCP_REGION) are set.
+#   push:
+#     branches: ["main"]
 on:
-  push:
-    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   deploy:
