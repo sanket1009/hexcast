@@ -168,6 +168,17 @@ def test_check_briefing_flags_urgency_mismatch():
     assert bad["urgency matches burden class"] is False
 
 
+def test_check_briefing_flags_system_talk():
+    risk = _risk("A", "CRITICAL")
+    leaky = _briefing("A", "CRITICAL")
+    leaky.summary = "The pipeline has set its urgency to CRITICAL."
+    clean = _briefing("A", "CRITICAL")
+    clean.summary = "This tract ranks 3 of 2,498 for burden, driven by heat."
+
+    assert check_briefing(leaky, risk)["no talk about the scoring system"] is False
+    assert check_briefing(clean, risk)["no talk about the scoring system"] is True
+
+
 def test_write_review_lists_tracts_and_failures(tmp_path):
     path = tmp_path / "review.md"
     risks = [_risk("A", "CRITICAL"), _risk("B")]

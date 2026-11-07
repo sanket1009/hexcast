@@ -19,6 +19,7 @@ sample's summaries and checks.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -134,8 +135,23 @@ def commit_week(
 # Checks and review file
 # ---------------------------------------------------------------------------
 
+# Phrases that mean the briefing is talking about how it was scored instead of
+# the tract. Readers are health officials; they need conditions and actions.
+SYSTEM_TALK = re.compile(
+    r"\bpipeline\b|\burgency (level )?(is |was |has been )?set\b|\bset by the\b|\bscoring\b",
+    re.IGNORECASE,
+)
+
+
+def _briefing_text(briefing: Briefing) -> str:
+    parts = [briefing.summary, *briefing.key_risks, *briefing.data_gaps]
+    parts += [a["action"] for a in briefing.actions]
+    return "\n".join(parts)
+
+
 def check_briefing(briefing: Briefing, risk: TractRisk) -> dict[str, bool]:
     return {
+        "no talk about the scoring system": not SYSTEM_TALK.search(_briefing_text(briefing)),
         "urgency matches burden class": briefing.urgency == risk.urgency,
         "summary written": bool(briefing.summary.strip()),
         "at least one grounded action": len(briefing.actions) > 0,
