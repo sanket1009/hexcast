@@ -125,6 +125,44 @@ Rules:
 # Generator
 # ---------------------------------------------------------------------------
 
+# Chunks searched per driver before picking. Larger than the quota so that
+# pick_excerpts can skip repeat pages and still fill it.
+CANDIDATES_PER_DRIVER = 10
+
+
+def pick_excerpts(
+    ranked_lists: list[list[RetrievedChunk]],
+    quota: int,
+    exclude: set[str] = frozenset(),
+) -> list[RetrievedChunk]:
+    """
+    Pick up to `quota` chunks for one driver.
+
+    Takes turns across the ranked lists (one per vulnerable group): best from
+    each, then second-best, and so on. Skips chunks in `exclude` (already
+    picked for another driver) and any page already used for this driver, so
+    three neighbouring chunks of one page cannot fill the whole quota.
+    """
+    picked: list[RetrievedChunk] = []
+    seen_ids = set(exclude)
+    seen_pages: set[tuple[str, int]] = set()
+
+    for tier in zip_longest(*ranked_lists):
+        for chunk in tier:
+            if len(picked) == quota:
+                return picked
+            if chunk is None or chunk.id in seen_ids:
+                continue
+            page = (chunk.source, chunk.page)
+            if page in seen_pages:
+                continue
+            picked.append(chunk)
+            seen_ids.add(chunk.id)
+            seen_pages.add(page)
+
+    return picked
+
+
 class BriefingGenerator:
     """Builds grounded briefings. Loads the retriever and API client once."""
 
@@ -200,8 +238,8 @@ class BriefingGenerator:
 
     def _retrieve(self, tract: TractRisk) -> list[RetrievedChunk]:
         """
-        For each driver, run one search per vulnerable group, then take turns
-        picking each group's best remaining chunk until the driver's quota is full.
+        For each driver, run one search per vulnerable group, then pick up to
+        the driver's quota with pick_excerpts (one chunk per page).
         """
         groups = list(tract.vulnerable_groups) or [self.default_group]
         selected: dict[str, RetrievedChunk] = {}
@@ -212,24 +250,17 @@ class BriefingGenerator:
                 logger.warning(f"No retrieval query configured for driver '{driver}'")
                 continue
 
-            # One ranked list per group, nearest first
-            ranked_lists = [self.retriever.retrieve(template.format(group=g)) for g in groups]
-
-            taken = 0
-            # Best from each group, then second-best from each, and so on
-            for tier in zip_longest(*ranked_lists):
-                for chunk in tier:
-                    if taken == self.per_driver:
-                        break
-                    if chunk is None or chunk.id in selected:
-                        continue
-                    selected[chunk.id] = chunk
-                    taken += 1
-                if taken == self.per_driver:
-                    break
+            # One ranked list per group, nearest first. Search wider than the
+            # quota so the one-per-page rule has other pages to choose from.
+            ranked_lists = [
+                self.retriever.retrieve(template.format(group=g), top_k=CANDIDATES_PER_DRIVER)
+                for g in groups
+            ]
+            for chunk in pick_excerpts(ranked_lists, self.per_driver, exclude=set(selected)):
+                selected[chunk.id] = chunk
 
         return list(selected.values())
-    
+
     def _build_prompt(
         self, tract: TractRisk, urgency: str, excerpts: dict[str, RetrievedChunk]
     ) -> str:

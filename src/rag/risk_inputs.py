@@ -17,8 +17,8 @@ Drivers:
     A component is a driver when the tract is in the city's top quarter for
     that component. If no component qualifies, the single highest one is the
     driver, so every briefing has at least one driver.
-    Healthcare access is not a driver yet: the policy corpus has no
-    healthcare-access excerpt to cite (see driver_queries in pipeline.yaml).
+    access_z is signed so that positive means worse access, so the same
+    top-quarter rule flags the worst-access tracts, including deserts.
 
 Vulnerable groups:
     The default group from config. The Census ACS module will replace this.
@@ -40,6 +40,7 @@ URGENCY_BY_CLASS = {"CRITICAL": "CRITICAL", "HIGH": "ELEVATED"}
 DRIVER_COMPONENTS = {
     "heat": "lst_z",
     "air_quality": "pm25_z",
+    "healthcare_access": "access_z",
 }
 
 TOP_QUARTILE = 0.75

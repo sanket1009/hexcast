@@ -96,8 +96,11 @@ rag:
   default_vulnerable_group: "vulnerable residents"
   driver_queries:
     heat: "actions to protect {group} from extreme heat, such as cooling centers and safer indoor temperatures"
-    air_quality: "actions to protect {group} from wildfire smoke, such as staying indoors and filtering indoor air"
-    # healthcare_access: add a query once the corpus includes a healthcare-access document
+    # Driver is the annual mean PM2.5 (long-term exposure), so the query targets
+    # traffic and near-road exposure. Smoke guidance waits for a real-time smoke
+    # driver (AirNow); with it in this query, CDPH smoke pages took every slot.
+    air_quality: "actions to reduce {group}'s long-term exposure to fine particle pollution near busy roads and freeways, such as high-efficiency indoor air filtration and roadside vegetation barriers"
+    healthcare_access: "actions for health services to reach {group} with limited access to hospitals, such as mobile clinics, street medicine outreach, and heat-illness protocols for health providers and EMTs"
 
 logging:
   level: "INFO"
