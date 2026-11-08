@@ -25,12 +25,11 @@ Changing the level in pipeline.yaml affects every module simultaneously.
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 
 def get_logger(
     name: str,
-    level: Optional[str] = None,
+    level: str | None = None,
 ) -> logging.Logger:
     """
     Get a configured logger for a pipeline module.
@@ -125,7 +124,7 @@ def get_logger(
     return logger
 
 
-def _load_log_config() -> tuple[str, str, str, bool, Optional[str]]:
+def _load_log_config() -> tuple[str, str, str, bool, str | None]:
     """
     Load logging configuration from pipeline.yaml.
 
@@ -172,8 +171,7 @@ def _load_log_config() -> tuple[str, str, str, bool, Optional[str]]:
         return (
             log_config.get("level", "INFO"),
             log_config.get(
-                "format",
-                "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+                "format", "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
             ),
             log_config.get("date_format", "%Y-%m-%d %H:%M:%S"),
             log_config.get("log_to_file", False),

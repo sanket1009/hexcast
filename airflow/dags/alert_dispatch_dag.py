@@ -33,7 +33,6 @@ from chbindex_common import CITIES, DEFAULT_ARGS, ROOT, WEEK_PATTERN, project_co
 
 
 def build_alert_dag(city: str):
-
     @dag(
         dag_id=f"alert_dispatch_{city}",
         description=f"Critical-tract email and optional briefings for {city}",
@@ -41,24 +40,32 @@ def build_alert_dag(city: str):
         max_active_runs=1,
         default_args=DEFAULT_ARGS,
         params={
-            "week_start": Param(type="string", pattern=WEEK_PATTERN, description="Monday of the week, YYYY-MM-DD."),
+            "week_start": Param(
+                type="string",
+                pattern=WEEK_PATTERN,
+                description="Monday of the week, YYYY-MM-DD.",
+            ),
             "generate_briefings": Param(
-                False, type="boolean",
+                False,
+                type="boolean",
                 description="Generate model briefings first (costs API credit; about 1 to 2 USD for LA).",
             ),
-            "send_email": Param(True, type="boolean", description="Email the digest to ALERT_EMAIL_TO."),
+            "send_email": Param(
+                True, type="boolean", description="Email the digest to ALERT_EMAIL_TO."
+            ),
         },
         tags=["chbindex", "alerts", city],
     )
     def alert_dispatch():
-
         @task
         def resolve_week() -> str:
             from datetime import date
 
             from src.utils.weeks import monday_of
 
-            return monday_of(date.fromisoformat(get_current_context()["params"]["week_start"])).isoformat()
+            return monday_of(
+                date.fromisoformat(get_current_context()["params"]["week_start"])
+            ).isoformat()
 
         # Several hundred model calls take longer than the default timeout
         @task(execution_timeout=timedelta(hours=3))
@@ -74,10 +81,14 @@ def build_alert_dag(city: str):
 
             config = project_config(city)
             risks = build_tract_risks(config, week)
-            checkpoint = ROOT / "data" / "briefing_runs" / week / "full_checkpoint.jsonl"
+            checkpoint = (
+                ROOT / "data" / "briefing_runs" / week / "full_checkpoint.jsonl"
+            )
             checkpoint.parent.mkdir(parents=True, exist_ok=True)
             briefings, failures = run_week(risks, BriefingGenerator(config), checkpoint)
-            commit_week(briefings, failures, date.fromisoformat(week), config)  # raises if any failed
+            commit_week(
+                briefings, failures, date.fromisoformat(week), config
+            )  # raises if any failed
             return {"briefings": len(briefings)}
 
         # Runs whether briefings were generated or skipped, but not if they failed
@@ -91,7 +102,9 @@ def build_alert_dag(city: str):
             out_dir = ROOT / "data" / "alerts" / city / week
             out_dir.mkdir(parents=True, exist_ok=True)
             html_path = out_dir / "digest.html"
-            html_path.write_text(render_html(digest, top_n=config["alerts"]["top_n"]), encoding="utf-8")
+            html_path.write_text(
+                render_html(digest, top_n=config["alerts"]["top_n"]), encoding="utf-8"
+            )
             csv_path = write_csv(digest, out_dir / f"critical_tracts_{week}.csv")
             return {
                 "subject": render_subject(digest),
@@ -108,9 +121,15 @@ def build_alert_dag(city: str):
 
             from airflow.providers.smtp.hooks.smtp import SmtpHook
 
-            recipients = [a.strip() for a in project_config(city)["secrets"]["ALERT_EMAIL_TO"].split(",") if a.strip()]
+            recipients = [
+                a.strip()
+                for a in project_config(city)["secrets"]["ALERT_EMAIL_TO"].split(",")
+                if a.strip()
+            ]
             if not recipients:
-                raise AirflowSkipException(f"ALERT_EMAIL_TO is empty; digest saved at {digest['html_path']}")
+                raise AirflowSkipException(
+                    f"ALERT_EMAIL_TO is empty; digest saved at {digest['html_path']}"
+                )
 
             with open(digest["html_path"], encoding="utf-8") as f:
                 html = f.read()

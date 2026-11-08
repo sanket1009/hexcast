@@ -38,7 +38,6 @@ MAX_WEEKS = 160  # about three years; a guard against a mistyped range
 
 
 def build_backfill_dag(city: str):
-
     @dag(
         dag_id=f"backfill_{city}",
         description=f"Load and score a range of past weeks for {city}",
@@ -46,13 +45,20 @@ def build_backfill_dag(city: str):
         max_active_runs=1,
         default_args=DEFAULT_ARGS,
         params={
-            "first_week": Param(type="string", pattern=WEEK_PATTERN, description="First Monday, YYYY-MM-DD."),
-            "last_week": Param(type="string", pattern=WEEK_PATTERN, description="Last Monday, YYYY-MM-DD."),
+            "first_week": Param(
+                type="string",
+                pattern=WEEK_PATTERN,
+                description="First Monday, YYYY-MM-DD.",
+            ),
+            "last_week": Param(
+                type="string",
+                pattern=WEEK_PATTERN,
+                description="Last Monday, YYYY-MM-DD.",
+            ),
         },
         tags=["chbindex", "backfill", city],
     )
     def backfill():
-
         @task
         def resolve_weeks() -> list[str]:
             from datetime import date, timedelta
@@ -69,7 +75,9 @@ def build_backfill_dag(city: str):
                 weeks.append(first.isoformat())
                 first += timedelta(weeks=1)
             if len(weeks) > MAX_WEEKS:
-                raise ValueError(f"{len(weeks)} weeks requested; the limit is {MAX_WEEKS}")
+                raise ValueError(
+                    f"{len(weeks)} weeks requested; the limit is {MAX_WEEKS}"
+                )
             print(f"Backfilling {len(weeks)} weeks: {weeks[0]} to {weeks[-1]}")
             return weeks
 
@@ -77,14 +85,21 @@ def build_backfill_dag(city: str):
         def pull_pm25(weeks: list[str]) -> dict:
             from src.ingestion.epa_aqs import pull_pm25_range
 
-            return pull_pm25_range(project_config(city), week_start(weeks[0]), week_start(weeks[-1]))
+            return pull_pm25_range(
+                project_config(city), week_start(weeks[0]), week_start(weeks[-1])
+            )
 
         @task(max_active_tis_per_dagrun=4)
         def pull_lst(week: str) -> dict:
             from src.ingestion.gee_lst import pull_lst_raster
 
             try:
-                return {"week": week, "raster": pull_lst_raster(project_config(city), week_start=week_start(week))}
+                return {
+                    "week": week,
+                    "raster": pull_lst_raster(
+                        project_config(city), week_start=week_start(week)
+                    ),
+                }
             except Exception as exc:  # cloud cover, export timeout: record and move on
                 print(f"LST failed for {week}: {type(exc).__name__}: {exc}")
                 return {"week": week, "raster": None}
@@ -93,8 +108,12 @@ def build_backfill_dag(city: str):
         def spatial_confs(pm25: dict, lst: list[dict]) -> list[dict]:
             lst_ok = {r["week"] for r in lst if r["raster"]}
             ready = [w for w in pm25["weeks_written"] if w in lst_ok]
-            skipped = sorted(set(pm25["weeks_missing"]) | {r["week"] for r in lst if not r["raster"]})
-            print(f"{len(ready)} weeks ready for scoring; skipped (no PM2.5 or no LST): {skipped}")
+            skipped = sorted(
+                set(pm25["weeks_missing"]) | {r["week"] for r in lst if not r["raster"]}
+            )
+            print(
+                f"{len(ready)} weeks ready for scoring; skipped (no PM2.5 or no LST): {skipped}"
+            )
             return [{"week_start": w, "notify": False} for w in ready]
 
         weeks = resolve_weeks()

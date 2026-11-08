@@ -72,6 +72,7 @@ HIGH_RISK_THRESHOLD = 0.75
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def engineer_features(
     config: dict[str, Any],
     week_start: datetime | None = None,
@@ -96,16 +97,11 @@ def engineer_features(
     if week_start is None:
         today = datetime.now()
         week_start = today - timedelta(days=today.weekday())
-        week_start = week_start.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     week_str = week_start.strftime("%Y-%m-%d")
 
-    logger.info(
-        f"Engineering features for {config['city_name']} "
-        f"week of {week_str}"
-    )
+    logger.info(f"Engineering features for {config['city_name']} week of {week_str}")
 
     # Step 1 — Load historical compound scores (52 weeks)
     # We need history to compute temporal lags
@@ -126,9 +122,7 @@ def engineer_features(
     demographics_df = _load_demographics(config)
 
     # Step 5 — Engineer socioeconomic interaction features
-    socio_df = _engineer_socioeconomic_features(
-        temporal_df, demographics_df
-    )
+    socio_df = _engineer_socioeconomic_features(temporal_df, demographics_df)
     logger.info(f"Socioeconomic features added: {len(socio_df.columns)} columns")
 
     # Step 6 — Add target variable
@@ -140,9 +134,7 @@ def engineer_features(
     tract_h3 = _assign_h3_cells(demographics_df, config)
 
     # Step 8 — Compute H3 spatial lag features
-    spatial_df = _compute_h3_spatial_lags(
-        socio_df, tract_h3, scores_wide, week_start
-    )
+    spatial_df = _compute_h3_spatial_lags(socio_df, tract_h3, scores_wide, week_start)
     logger.info(f"H3 spatial lag features added: {len(spatial_df.columns)} columns")
 
     # Step 9 — Split into Model A and Model B feature sets
@@ -165,6 +157,7 @@ def engineer_features(
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _load_score_history(
     config: dict[str, Any],
@@ -257,10 +250,7 @@ def _pivot_scores_wide(scores_long: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Rename columns to score_{date} format
-    wide.columns = [
-        f"score_{d.strftime('%Y-%m-%d')}"
-        for d in wide.columns
-    ]
+    wide.columns = [f"score_{d.strftime('%Y-%m-%d')}" for d in wide.columns]
 
     return wide.reset_index()
 
@@ -321,7 +311,9 @@ def _engineer_temporal_features(
         df["rolling_std_4w"] = lag_matrix.std(axis=1).values
 
         # Count weeks in high risk over last 4 weeks
-        df["weeks_high_risk_4w"] = (lag_matrix >= HIGH_RISK_THRESHOLD).sum(axis=1).values
+        df["weeks_high_risk_4w"] = (
+            (lag_matrix >= HIGH_RISK_THRESHOLD).sum(axis=1).values
+        )
     else:
         df["rolling_mean_4w"] = np.nan
         df["rolling_std_4w"] = np.nan
@@ -382,9 +374,9 @@ def _load_demographics(config: dict[str, Any]) -> pd.DataFrame:
     # We use diabetes + heart disease as proxy for elderly vulnerability
     # (both conditions are strongly age-correlated)
     df["vulnerability_index"] = (
-        df["asthma_pct"].fillna(0) * 0.3 +
-        df["heart_disease_pct"].fillna(0) * 0.4 +
-        df["copd_pct"].fillna(0) * 0.3
+        df["asthma_pct"].fillna(0) * 0.3
+        + df["heart_disease_pct"].fillna(0) * 0.4
+        + df["copd_pct"].fillna(0) * 0.3
     )
 
     return df
@@ -425,20 +417,24 @@ def _engineer_socioeconomic_features(
         Temporal features + socioeconomic features merged.
     """
     df = temporal_df.merge(
-        demographics_df[[
-            "geoid", "population", "median_income",
-            "asthma_pct", "copd_pct", "heart_disease_pct",
-            "vulnerability_index",
-        ]],
+        demographics_df[
+            [
+                "geoid",
+                "population",
+                "median_income",
+                "asthma_pct",
+                "copd_pct",
+                "heart_disease_pct",
+                "vulnerability_index",
+            ]
+        ],
         on="geoid",
         how="left",
     )
 
     # Normalize median income to 0-1 scale
     income = df["median_income"].fillna(df["median_income"].median())
-    df["median_income_norm"] = (
-        (income - income.min()) / (income.max() - income.min())
-    )
+    df["median_income_norm"] = (income - income.min()) / (income.max() - income.min())
 
     # Income quartile for equity audit — 1=lowest, 4=highest
     df["income_quartile"] = pd.qcut(
@@ -453,8 +449,14 @@ def _engineer_socioeconomic_features(
 
     # Fill missing temporal features with city median
     temporal_cols = [
-        "score_current", "lag_1w", "lag_2w", "lag_4w",
-        "rolling_mean_4w", "rolling_std_4w", "delta_1w", "delta_4w",
+        "score_current",
+        "lag_1w",
+        "lag_2w",
+        "lag_4w",
+        "rolling_mean_4w",
+        "rolling_std_4w",
+        "delta_1w",
+        "delta_4w",
     ]
     for col in temporal_cols:
         if col in df.columns:
@@ -499,11 +501,9 @@ def _add_target_variable(
     next_week_str = next_week.strftime("%Y-%m-%d")
 
     # Get next week's compound scores
-    next_week_scores = scores_history[
-        scores_history["week_start_date"] == next_week
-    ][["geoid", "compound_score"]].rename(
-        columns={"compound_score": "next_week_score"}
-    )
+    next_week_scores = scores_history[scores_history["week_start_date"] == next_week][
+        ["geoid", "compound_score"]
+    ].rename(columns={"compound_score": "next_week_score"})
 
     if next_week_scores.empty:
         logger.warning(
@@ -557,9 +557,7 @@ def _assign_h3_cells(
     """
     resolution = config["spatial"]["h3_resolution"]
 
-    logger.debug(
-        f"Assigning tract centroids to H3 resolution {resolution} cells"
-    )
+    logger.debug(f"Assigning tract centroids to H3 resolution {resolution} cells")
 
     records = []
     for _, row in demographics_df.iterrows():
@@ -583,17 +581,17 @@ def _assign_h3_cells(
         # Second-order neighbors (ring 2) — 12 hexagons in the outer ring
         # grid_disk(k=2) returns all cells within 2 steps
         # Subtract ring 1 and self to get only ring 2
-        neighbors_r2 = list(
-            h3.grid_disk(cell_r7, 2) - h3.grid_disk(cell_r7, 1)
-        )
+        neighbors_r2 = list(h3.grid_disk(cell_r7, 2) - h3.grid_disk(cell_r7, 1))
 
-        records.append({
-            "geoid": row["geoid"],
-            "h3_cell_r7": cell_r7,
-            "h3_cell_r6": cell_r6,
-            "h3_neighbors_r1": neighbors_r1,
-            "h3_neighbors_r2": neighbors_r2,
-        })
+        records.append(
+            {
+                "geoid": row["geoid"],
+                "h3_cell_r7": cell_r7,
+                "h3_cell_r6": cell_r6,
+                "h3_neighbors_r1": neighbors_r1,
+                "h3_neighbors_r2": neighbors_r2,
+            }
+        )
 
     tract_h3 = pd.DataFrame(records)
     logger.debug(
@@ -649,11 +647,16 @@ def _compute_h3_spatial_lags(
 
     # Build lookup: h3_cell → mean compound score this week
     # When multiple tracts share an H3 cell, average their scores
-    cell_scores = tract_h3.merge(
-        scores_wide[["geoid", score_col]],
-        on="geoid",
-        how="left",
-    ).groupby("h3_cell_r7")[score_col].mean().to_dict()
+    cell_scores = (
+        tract_h3.merge(
+            scores_wide[["geoid", score_col]],
+            on="geoid",
+            how="left",
+        )
+        .groupby("h3_cell_r7")[score_col]
+        .mean()
+        .to_dict()
+    )
 
     lag_records = []
 
@@ -679,18 +682,24 @@ def _compute_h3_spatial_lags(
         h3_lag_r1 = np.mean(r1_scores) if r1_scores else np.nan
         h3_lag_r2 = np.mean(r2_scores) if r2_scores else np.nan
 
-        lag_records.append({
-            "geoid": geoid,
-            "h3_lag_ring1": round(h3_lag_r1, 4) if not np.isnan(h3_lag_r1) else np.nan,
-            "h3_lag_ring2": round(h3_lag_r2, 4) if not np.isnan(h3_lag_r2) else np.nan,
-            "h3_lag_diff": round(h3_lag_r1 - h3_lag_r2, 4)
+        lag_records.append(
+            {
+                "geoid": geoid,
+                "h3_lag_ring1": round(h3_lag_r1, 4)
+                if not np.isnan(h3_lag_r1)
+                else np.nan,
+                "h3_lag_ring2": round(h3_lag_r2, 4)
+                if not np.isnan(h3_lag_r2)
+                else np.nan,
+                "h3_lag_diff": round(h3_lag_r1 - h3_lag_r2, 4)
                 if not (np.isnan(h3_lag_r1) or np.isnan(h3_lag_r2))
                 else np.nan,
-            "h3_max_neighbor": round(max(r1_scores), 4) if r1_scores else np.nan,
-            "h3_high_risk_neighbors": sum(
-                1 for s in r1_scores if s >= HIGH_RISK_THRESHOLD
-            ),
-        })
+                "h3_max_neighbor": round(max(r1_scores), 4) if r1_scores else np.nan,
+                "h3_high_risk_neighbors": sum(
+                    1 for s in r1_scores if s >= HIGH_RISK_THRESHOLD
+                ),
+            }
+        )
 
     lag_df = pd.DataFrame(lag_records)
 
@@ -737,25 +746,40 @@ def _split_feature_sets(
     """
     # Metadata and target columns — included in both
     meta_cols = [
-        "geoid", "week_of_year", "is_high_risk_next_week",
-        "next_week_score", "income_quartile",
+        "geoid",
+        "week_of_year",
+        "is_high_risk_next_week",
+        "next_week_score",
+        "income_quartile",
     ]
 
     # Model A feature columns
     model_a_features = [
-        "score_current", "lag_1w", "lag_2w", "lag_4w",
-        "rolling_mean_4w", "rolling_std_4w",
-        "delta_1w", "delta_4w",
-        "weeks_high_risk_4w", "is_summer",
-        "vulnerability_index", "median_income_norm",
-        "asthma_pct", "copd_pct", "heart_disease_pct",
+        "score_current",
+        "lag_1w",
+        "lag_2w",
+        "lag_4w",
+        "rolling_mean_4w",
+        "rolling_std_4w",
+        "delta_1w",
+        "delta_4w",
+        "weeks_high_risk_4w",
+        "is_summer",
+        "vulnerability_index",
+        "median_income_norm",
+        "asthma_pct",
+        "copd_pct",
+        "heart_disease_pct",
         "population",
     ]
 
     # Model B adds H3 spatial lag features on top of Model A
     model_b_extra = [
-        "h3_lag_ring1", "h3_lag_ring2", "h3_lag_diff",
-        "h3_max_neighbor", "h3_high_risk_neighbors",
+        "h3_lag_ring1",
+        "h3_lag_ring2",
+        "h3_lag_diff",
+        "h3_max_neighbor",
+        "h3_high_risk_neighbors",
     ]
 
     # Filter to columns that actually exist

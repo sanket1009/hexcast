@@ -62,6 +62,7 @@ logger = get_logger(__name__)
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def run_kriging(
     config: dict[str, Any],
     week_start: datetime | None = None,
@@ -126,16 +127,17 @@ def run_kriging(
     # Kriging requires distances in meters — not degrees
     # Using degrees produces wrong variograms because
     # 1 degree longitude ≠ 1 degree latitude in distance
-    monitors_utm, tracts_utm = _project_to_utm(
-        monitors_df, tracts_df, config
-    )
+    monitors_utm, tracts_utm = _project_to_utm(monitors_df, tracts_df, config)
 
     # Step 4 — Empirical variogram, weighted spherical fit, plot
     bins, params = _variogram_for(monitors_utm, config)
     logger.info(
         "Empirical variogram bins:\n"
-        + bins.assign(lag_km=(bins["lag_m"] / 1000).round(1))
-              [["lag_km", "semivariance", "n_pairs"]].round(3).to_string(index=False)
+        + bins.assign(lag_km=(bins["lag_m"] / 1000).round(1))[
+            ["lag_km", "semivariance", "n_pairs"]
+        ]
+        .round(3)
+        .to_string(index=False)
     )
     logger.info(
         f"Nugget floor from sampling noise: {params['nugget_floor']:.3f}. "
@@ -154,19 +156,18 @@ def run_kriging(
 
     # Step 6 — Join GEOID back to kriged predictions
     # tracts_utm still has geoid column — merge on index
-    result_df = pd.DataFrame({
-        "geoid": tracts_df["geoid"].values,
-        "pm25_kriged": kriged_df["pm25_kriged"].values,
-        "pm25_kriged_variance": kriged_df["pm25_kriged_variance"].values,
-    })
+    result_df = pd.DataFrame(
+        {
+            "geoid": tracts_df["geoid"].values,
+            "pm25_kriged": kriged_df["pm25_kriged"].values,
+            "pm25_kriged_variance": kriged_df["pm25_kriged_variance"].values,
+        }
+    )
 
     # Step 7 — Compute percentile rank within city
     # Used for compound score normalization
     result_df["pm25_percentile"] = (
-        result_df["pm25_kriged"]
-        .rank(pct=True)
-        .mul(100)
-        .round(1)
+        result_df["pm25_kriged"].rank(pct=True).mul(100).round(1)
     )
 
     # Step 8 — Add metadata
@@ -185,7 +186,9 @@ def run_kriging(
     _validate_output(result_df, len(tracts_df))
 
     # Step 10 — Write to BigQuery
-    write_dataframe(result_df, "pm25_kriged", config, write_disposition=REPLACE_PARTITION)
+    write_dataframe(
+        result_df, "pm25_kriged", config, write_disposition=REPLACE_PARTITION
+    )
 
     logger.info(
         f"Kriging complete: {len(result_df):,} tracts, "
@@ -200,6 +203,7 @@ def run_kriging(
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _load_monitor_readings(
     config: dict[str, Any],
@@ -402,7 +406,7 @@ def _empirical_variogram(
         One row per bin: lag_m, semivariance, n_pairs.
     """
     coords = np.column_stack([x, y])
-    h = pdist(coords)                                   # meters
+    h = pdist(coords)  # meters
     gamma = 0.5 * pdist(z.reshape(-1, 1), "sqeuclidean")
 
     max_lag = h.max() / 2
@@ -425,19 +429,20 @@ def _empirical_variogram(
     bins = (
         pd.DataFrame({"bin": bin_idx, "h": h, "gamma": gamma})
         .groupby("bin")
-        .agg(lag_m=("h", "mean"), semivariance=("gamma", "mean"),
-             n_pairs=("h", "size"))
+        .agg(lag_m=("h", "mean"), semivariance=("gamma", "mean"), n_pairs=("h", "size"))
         .reset_index(drop=True)
     )
     return bins
 
 
-def _spherical(h: np.ndarray, psill: float, range_m: float, nugget: float) -> np.ndarray:
+def _spherical(
+    h: np.ndarray, psill: float, range_m: float, nugget: float
+) -> np.ndarray:
     """Spherical model, same form PyKrige uses."""
     r = h / range_m
     return np.where(
         h < range_m,
-        nugget + psill * (1.5 * r - 0.5 * r ** 3),
+        nugget + psill * (1.5 * r - 0.5 * r**3),
         nugget + psill,
     )
 
@@ -489,18 +494,28 @@ def _fit_variogram(bins: pd.DataFrame, nugget_floor: float = 0.0) -> dict[str, f
     # (kept under the top bin so the bounds stay valid)
     floor = min(nugget_floor, sv.max() * 0.9)
 
-    p0 = [max(sv.max() - sv.min(), 1e-6), lag.mean(), max(sv.min() * 0.5, floor * 1.1 + 1e-9)]
+    p0 = [
+        max(sv.max() - sv.min(), 1e-6),
+        lag.mean(),
+        max(sv.min() * 0.5, floor * 1.1 + 1e-9),
+    ]
     lower = [0, lag.min() * 0.5, floor]
     upper = [sv.max() * 3, lag.max() * 3, sv.max()]
-    p0 = [min(max(v, lo + 1e-9), hi - 1e-9) for v, lo, hi in zip(p0, lower, upper)]
+    p0 = [
+        min(max(v, lo + 1e-9), hi - 1e-9)
+        for v, lo, hi in zip(p0, lower, upper, strict=False)
+    ]
 
     # A parameter resting on its bound (nugget at the floor is expected)
     # leaves no covariance to estimate; the fit itself is still fine
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", OptimizeWarning)
         (psill, range_m, nugget), _ = curve_fit(
-            _spherical, lag, sv,
-            p0=p0, bounds=(lower, upper),
+            _spherical,
+            lag,
+            sv,
+            p0=p0,
+            bounds=(lower, upper),
             sigma=1 / np.sqrt(bins["n_pairs"].values),
             maxfev=10_000,
         )
@@ -520,22 +535,42 @@ def _save_variogram_plot(
     data/object_store locally and in the city's bucket on GCP.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.scatter(
-        bins["lag_m"] / 1000, bins["semivariance"],
-        s=bins["n_pairs"] * 4, alpha=0.7, label="Empirical (size = pairs)",
+        bins["lag_m"] / 1000,
+        bins["semivariance"],
+        s=bins["n_pairs"] * 4,
+        alpha=0.7,
+        label="Empirical (size = pairs)",
     )
     for _, row in bins.iterrows():
-        ax.annotate(int(row["n_pairs"]), (row["lag_m"] / 1000, row["semivariance"]),
-                    textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
+        ax.annotate(
+            int(row["n_pairs"]),
+            (row["lag_m"] / 1000, row["semivariance"]),
+            textcoords="offset points",
+            xytext=(0, 8),
+            ha="center",
+            fontsize=8,
+        )
 
     h_line = np.linspace(0, bins["lag_m"].max() * 1.1, 200)
-    ax.plot(h_line / 1000, _spherical(h_line, **{
-        "psill": params["psill"], "range_m": params["range"], "nugget": params["nugget"]
-    }), color="crimson", label="Spherical fit")
+    ax.plot(
+        h_line / 1000,
+        _spherical(
+            h_line,
+            **{
+                "psill": params["psill"],
+                "range_m": params["range"],
+                "nugget": params["nugget"],
+            },
+        ),
+        color="crimson",
+        label="Spherical fit",
+    )
 
     ax.axhline(params["nugget"] + params["psill"], ls=":", color="grey")
     ax.axvline(params["range"] / 1000, ls=":", color="grey")
@@ -561,7 +596,9 @@ def _save_variogram_plot(
     return path
 
 
-def _variogram_for(monitors_utm: pd.DataFrame, config: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, float]]:
+def _variogram_for(
+    monitors_utm: pd.DataFrame, config: dict[str, Any]
+) -> tuple[pd.DataFrame, dict[str, float]]:
     """Empirical variogram + spherical fit for one set of monitors."""
     bins = _empirical_variogram(
         monitors_utm["x_utm"].values,
@@ -596,7 +633,9 @@ def _fit_and_predict(
         γ(h) = nugget + psill × [1.5(h/range) - 0.5(h/range)³]   h < range
         γ(h) = nugget + psill                                    h ≥ range
     """
-    logger.info(f"Kriging {len(tracts_utm):,} tract centroids from {len(monitors_utm)} monitors")
+    logger.info(
+        f"Kriging {len(tracts_utm):,} tract centroids from {len(monitors_utm)} monitors"
+    )
 
     ok = OrdinaryKriging(
         x=monitors_utm["x_utm"].values,
@@ -623,10 +662,12 @@ def _fit_and_predict(
         f"std={pm25_pred.std():.2f}, mean variance={pm25_var.mean():.4f}"
     )
 
-    return pd.DataFrame({
-        "pm25_kriged": pm25_pred.round(3),
-        "pm25_kriged_variance": pm25_var.round(6),
-    })
+    return pd.DataFrame(
+        {
+            "pm25_kriged": pm25_pred.round(3),
+            "pm25_kriged_variance": pm25_var.round(6),
+        }
+    )
 
 
 def _leave_one_out_cv(
@@ -653,8 +694,14 @@ def _leave_one_out_cv(
     n = len(monitors_utm)
     if n < 4:
         logger.warning(f"Only {n} monitors; LOO-CV needs at least 4. Skipping.")
-        return {"r2": np.nan, "mae": np.nan, "rmse": np.nan,
-                "r2_city": np.nan, "mae_city": np.nan, "n_folds": 0}
+        return {
+            "r2": np.nan,
+            "mae": np.nan,
+            "rmse": np.nan,
+            "r2_city": np.nan,
+            "mae_city": np.nan,
+            "n_folds": 0,
+        }
 
     logger.info(f"Running leave-one-out CV on {n} monitors")
     rows = []
@@ -664,14 +711,25 @@ def _leave_one_out_cv(
         try:
             _, params = _variogram_for(train, config)
             ok_cv = OrdinaryKriging(
-                x=train["x_utm"].values, y=train["y_utm"].values,
+                x=train["x_utm"].values,
+                y=train["y_utm"].values,
                 z=train["pm25_mean"].values,
-                variogram_model="spherical", variogram_parameters=_pykrige_params(params),
-                verbose=False, enable_plotting=False,
+                variogram_model="spherical",
+                variogram_parameters=_pykrige_params(params),
+                verbose=False,
+                enable_plotting=False,
             )
-            pred, _ = ok_cv.execute("points", np.array([held["x_utm"]]), np.array([held["y_utm"]]))
-            rows.append({"monitor_id": held["monitor_id"], "in_city": bool(held["in_city"]),
-                         "actual": held["pm25_mean"], "pred": float(np.asarray(pred)[0])})
+            pred, _ = ok_cv.execute(
+                "points", np.array([held["x_utm"]]), np.array([held["y_utm"]])
+            )
+            rows.append(
+                {
+                    "monitor_id": held["monitor_id"],
+                    "in_city": bool(held["in_city"]),
+                    "actual": held["pm25_mean"],
+                    "pred": float(np.asarray(pred)[0]),
+                }
+            )
         except Exception as e:  # one bad fold should not sink the run
             logger.warning(f"LOO-CV failed for {held['monitor_id']}: {e}")
 
@@ -687,16 +745,18 @@ def _leave_one_out_cv(
         "mae": float(np.mean(np.abs(cv["actual"] - cv["pred"]))),
         "rmse": float(np.sqrt(np.mean((cv["actual"] - cv["pred"]) ** 2))),
         "r2_city": _r2(city["actual"], city["pred"]) if len(city) >= 3 else np.nan,
-        "mae_city": float(np.mean(np.abs(city["actual"] - city["pred"]))) if len(city) else np.nan,
+        "mae_city": float(np.mean(np.abs(city["actual"] - city["pred"])))
+        if len(city)
+        else np.nan,
         "n_folds": len(cv),
     }
 
     logger.info(
         "LOO-CV per monitor:\n"
         + cv.assign(error=(cv["pred"] - cv["actual"]).round(2))
-            .round({"pred": 2})
-            .sort_values("error")
-            .to_string(index=False)
+        .round({"pred": 2})
+        .sort_values("error")
+        .to_string(index=False)
     )
     logger.info(
         f"LOO-CV: R²={out['r2']:.3f}, MAE={out['mae']:.2f}, RMSE={out['rmse']:.2f} μg/m³ "
@@ -747,9 +807,7 @@ def _validate_output(df: pd.DataFrame, expected_tract_count: int) -> None:
     # Check no null predictions
     null_preds = df["pm25_kriged"].isna().sum()
     if null_preds > 0:
-        raise ValueError(
-            f"{null_preds} tracts have null PM2.5 predictions."
-        )
+        raise ValueError(f"{null_preds} tracts have null PM2.5 predictions.")
 
     # Warn if CV R² is low — predictions may be unreliable
     if "cv_r2" in df.columns:

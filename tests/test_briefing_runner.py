@@ -69,14 +69,20 @@ def _config(tmp_path):
     return {
         "full_fips": "06037",
         "gcp": {"bigquery_dataset": "chbindex_06037"},
-        "bigquery": {"write_disposition": "WRITE_APPEND", "partition_field": "week_start_date"},
+        "bigquery": {
+            "write_disposition": "WRITE_APPEND",
+            "partition_field": "week_start_date",
+        },
         "storage": {"backend": "local", "local_db_path": str(tmp_path / "w.duckdb")},
         "rag": {"urgency_levels": ["MONITOR", "ELEVATED", "CRITICAL"]},
     }
 
 
 def test_sample_has_25_tracts_by_urgency_and_includes_deserts():
-    risks = [_risk(f"0603700{i:04d}", "CRITICAL", access=0.0 if i < 2 else 5.0) for i in range(30)]
+    risks = [
+        _risk(f"0603700{i:04d}", "CRITICAL", access=0.0 if i < 2 else 5.0)
+        for i in range(30)
+    ]
     risks += [_risk(f"0603800{i:04d}", "ELEVATED") for i in range(30)]
 
     chosen = select_sample(risks)
@@ -89,7 +95,9 @@ def test_sample_has_25_tracts_by_urgency_and_includes_deserts():
 
 def test_sample_is_deterministic():
     risks = [_risk(f"0603800{i:04d}", "ELEVATED") for i in range(40)]
-    assert [r.geoid for r in select_sample(risks)] == [r.geoid for r in select_sample(risks)]
+    assert [r.geoid for r in select_sample(risks)] == [
+        r.geoid for r in select_sample(risks)
+    ]
 
 
 def test_failed_tract_is_retried_once(tmp_path):
@@ -151,7 +159,9 @@ def test_commit_writes_complete_week(tmp_path):
 
     con = duckdb.connect(config["storage"]["local_db_path"], read_only=True)
     try:
-        n = con.execute(f'SELECT COUNT(*) FROM "chbindex_06037"."{BRIEFINGS_TABLE}"').fetchone()[0]
+        n = con.execute(
+            f'SELECT COUNT(*) FROM "chbindex_06037"."{BRIEFINGS_TABLE}"'
+        ).fetchone()[0]
     finally:
         con.close()
     assert n == 2
@@ -180,7 +190,13 @@ def test_check_briefing_flags_system_talk():
 def test_write_review_lists_tracts_and_failures(tmp_path):
     path = tmp_path / "review.md"
     risks = [_risk("A", "CRITICAL"), _risk("B")]
-    write_review(path, "2026-06-22", risks, [_briefing("A", "CRITICAL")], {"B": "BriefingError: x"})
+    write_review(
+        path,
+        "2026-06-22",
+        risks,
+        [_briefing("A", "CRITICAL")],
+        {"B": "BriefingError: x"},
+    )
 
     text = path.read_text()
     assert "## A: CRITICAL" in text

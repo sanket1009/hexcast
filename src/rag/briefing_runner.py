@@ -47,6 +47,7 @@ class Generator(Protocol):
 # Sample selection
 # ---------------------------------------------------------------------------
 
+
 def select_sample(risks: list[TractRisk]) -> list[TractRisk]:
     """
     Pick tracts for review: up to 3 zero-access tracts per urgency level (the
@@ -55,8 +56,12 @@ def select_sample(risks: list[TractRisk]) -> list[TractRisk]:
     """
     chosen: list[TractRisk] = []
     for urgency, n in SAMPLE_PER_URGENCY.items():
-        group = sorted((r for r in risks if r.urgency == urgency), key=lambda r: r.geoid)
-        deserts = [r for r in group if r.indicators.get(ACCESS_LABEL) == 0][:MAX_DESERTS_IN_SAMPLE]
+        group = sorted(
+            (r for r in risks if r.urgency == urgency), key=lambda r: r.geoid
+        )
+        deserts = [r for r in group if r.indicators.get(ACCESS_LABEL) == 0][
+            :MAX_DESERTS_IN_SAMPLE
+        ]
         picked = {r.geoid for r in deserts}
         rest = [r for r in group if r.geoid not in picked]
 
@@ -73,6 +78,7 @@ def select_sample(risks: list[TractRisk]) -> list[TractRisk]:
 # ---------------------------------------------------------------------------
 # Generation with checkpoints and retry
 # ---------------------------------------------------------------------------
+
 
 def run_week(
     risks: list[TractRisk],
@@ -99,9 +105,13 @@ def run_week(
             try:
                 briefing = generator.generate(risk)
                 break
-            except Exception as exc:  # BriefingError or API errors: record, retry, move on
+            except (
+                Exception
+            ) as exc:  # BriefingError or API errors: record, retry, move on
                 last_error = f"{type(exc).__name__}: {exc}"
-                logger.warning(f"Tract {risk.geoid} attempt {attempt + 1} failed: {last_error}")
+                logger.warning(
+                    f"Tract {risk.geoid} attempt {attempt + 1} failed: {last_error}"
+                )
 
         if briefing is None:
             failures[risk.geoid] = last_error
@@ -110,7 +120,9 @@ def run_week(
         briefings[risk.geoid] = briefing
         _append_checkpoint(checkpoint_path, briefing)
 
-    logger.info(f"Generated {len(briefings) - len(done)} new briefings; {len(failures)} failed")
+    logger.info(
+        f"Generated {len(briefings) - len(done)} new briefings; {len(failures)} failed"
+    )
     return list(briefings.values()), failures
 
 
@@ -151,7 +163,9 @@ def _briefing_text(briefing: Briefing) -> str:
 
 def check_briefing(briefing: Briefing, risk: TractRisk) -> dict[str, bool]:
     return {
-        "no talk about the scoring system": not SYSTEM_TALK.search(_briefing_text(briefing)),
+        "no talk about the scoring system": not SYSTEM_TALK.search(
+            _briefing_text(briefing)
+        ),
         "urgency matches burden class": briefing.urgency == risk.urgency,
         "summary written": bool(briefing.summary.strip()),
         "at least one grounded action": len(briefing.actions) > 0,
@@ -176,8 +190,10 @@ def write_review(
     for b in briefings:
         checks_by_geoid[b.geoid] = check_briefing(b, by_geoid[b.geoid])
         passed += all(checks_by_geoid[b.geoid].values())
-    lines.append(f"Tracts: {len(briefings)} written, {len(failures)} failed. "
-                 f"{passed} of {len(briefings)} passed every check.")
+    lines.append(
+        f"Tracts: {len(briefings)} written, {len(failures)} failed. "
+        f"{passed} of {len(briefings)} passed every check."
+    )
     lines.append("")
 
     for b in sorted(briefings, key=lambda x: x.geoid):
@@ -201,7 +217,11 @@ def write_review(
         ]
 
     if failures:
-        lines += ["## Failed tracts", *[f"- {g}: {err}" for g, err in failures.items()], ""]
+        lines += [
+            "## Failed tracts",
+            *[f"- {g}: {err}" for g, err in failures.items()],
+            "",
+        ]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines))
@@ -210,6 +230,7 @@ def write_review(
 # ---------------------------------------------------------------------------
 # Checkpoint files
 # ---------------------------------------------------------------------------
+
 
 def _load_checkpoint(path: Path) -> dict[str, Briefing]:
     if not path.exists():

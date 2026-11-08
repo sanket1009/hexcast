@@ -75,7 +75,6 @@ def build_ingest_dag(city: str):
         tags=["chbindex", "ingest", city],
     )
     def ingest_weekly():
-
         @task
         def resolve_week() -> str:
             from src.utils.weeks import monday_of, week_to_process
@@ -97,7 +96,9 @@ def build_ingest_dag(city: str):
 
             df = pull_pm25_readings(project_config(city), week_start=week_start(week))
             if df.empty:
-                raise ValueError(f"No PM2.5 readings for week {week}; AQS may not have it yet")
+                raise ValueError(
+                    f"No PM2.5 readings for week {week}; AQS may not have it yet"
+                )
             return len(df)
 
         @task
@@ -150,7 +151,9 @@ def build_ingest_dag(city: str):
         [pull_pm25(week), pull_lst(week)] >> start_spatial
         gate = reference_requested()
         gate >> [refresh_cdc_places(), refresh_hospitals()]
-        gate >> refresh_tracts() >> refresh_reporting_areas()  # areas are assigned to the new tracts
+        (
+            gate >> refresh_tracts() >> refresh_reporting_areas()
+        )  # areas are assigned to the new tracts
 
     return ingest_weekly()
 

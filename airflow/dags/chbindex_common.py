@@ -44,7 +44,9 @@ WEEK_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 
 def city_schedule(city: str) -> dict:
-    city_yaml = yaml.safe_load((ROOT / "config" / "cities" / f"{city}.yaml").read_text())
+    city_yaml = yaml.safe_load(
+        (ROOT / "config" / "cities" / f"{city}.yaml").read_text()
+    )
     return city_yaml["schedule"]
 
 

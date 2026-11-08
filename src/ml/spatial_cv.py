@@ -31,7 +31,8 @@ Usage:
         score = model.score(X[test_idx], y[test_idx])
 """
 
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import h3
 import numpy as np
@@ -160,8 +161,7 @@ class SpatialBlockCV(BaseCrossValidator):
         # Assign each block to a fold (round-robin assignment)
         # This roughly balances the number of blocks per fold
         block_to_fold = {
-            block: i % self.n_splits
-            for i, block in enumerate(shuffled_blocks)
+            block: i % self.n_splits for i, block in enumerate(shuffled_blocks)
         }
 
         logger.debug(
@@ -173,10 +173,7 @@ class SpatialBlockCV(BaseCrossValidator):
         # Generate train/test splits
         for fold in range(self.n_splits):
             # Test: all tracts whose H3 parent cell is in this fold
-            test_mask = np.array([
-                block_to_fold[g] == fold
-                for g in groups
-            ])
+            test_mask = np.array([block_to_fold[g] == fold for g in groups])
 
             # Train: all other tracts
             train_mask = ~test_mask
@@ -212,6 +209,7 @@ class SpatialBlockCV(BaseCrossValidator):
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
 
 def build_spatial_groups(
     geoids: pd.Series | list,
@@ -257,7 +255,7 @@ def build_spatial_groups(
     """
     groups = []
 
-    for lat, lon in zip(centroids_lat, centroids_lon):
+    for lat, lon in zip(centroids_lat, centroids_lon, strict=False):
         if pd.isna(lat) or pd.isna(lon):
             # Missing centroid — assign to a dummy block
             # This tract will consistently land in the same fold
@@ -376,12 +374,14 @@ def summarize_cv_folds(
         test_blocks = set(groups[test_idx])
         train_pct = len(train_idx) / len(groups) * 100
 
-        records.append({
-            "fold": fold + 1,
-            "n_train": len(train_idx),
-            "n_test": len(test_idx),
-            "n_test_blocks": len(test_blocks),
-            "train_pct": f"{train_pct:.1f}%",
-        })
+        records.append(
+            {
+                "fold": fold + 1,
+                "n_train": len(train_idx),
+                "n_test": len(test_idx),
+                "n_test_blocks": len(test_blocks),
+                "train_pct": f"{train_pct:.1f}%",
+            }
+        )
 
     return pd.DataFrame(records)

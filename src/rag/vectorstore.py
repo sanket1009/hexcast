@@ -30,7 +30,6 @@ from typing import Any
 
 import chromadb
 from chromadb.config import Settings
-
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -39,6 +38,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Public functions
 # ---------------------------------------------------------------------------
+
 
 def build_vectorstore(config: dict[str, Any], chunks: list[dict[str, Any]]) -> int:
     """
@@ -61,7 +61,7 @@ def build_vectorstore(config: dict[str, Any], chunks: list[dict[str, Any]]) -> i
     batch_size = config["rag"]["upsert_batch_size"]
 
     for start in range(0, len(chunks), batch_size):
-        batch = chunks[start:start + batch_size]
+        batch = chunks[start : start + batch_size]
         collection.upsert(
             ids=[c["id"] for c in batch],
             embeddings=[c["embedding"] for c in batch],
@@ -124,6 +124,7 @@ def get_collection(config: dict[str, Any], create: bool = False):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_client(chroma_dir: str) -> chromadb.ClientAPI:
     """Embedded, on-disk Chroma client with telemetry off."""
     path = Path(chroma_dir)
@@ -151,6 +152,6 @@ def _prune_stale(collection, keep_ids: set[str], batch_size: int) -> int:
     stale = sorted(existing - keep_ids)
 
     for start in range(0, len(stale), batch_size):
-        collection.delete(ids=stale[start:start + batch_size])
+        collection.delete(ids=stale[start : start + batch_size])
 
     return len(stale)

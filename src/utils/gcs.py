@@ -30,10 +30,9 @@ Storage backends:
     modules call these functions the same way either way.
 """
 
-import os
 import shutil
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from google.cloud import storage
 from google.oauth2 import service_account
@@ -46,6 +45,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Local backend (folder on disk)
 # ---------------------------------------------------------------------------
+
 
 def _is_local(config: dict[str, Any]) -> bool:
     """True when config selects the local folder backend instead of GCS."""
@@ -61,6 +61,7 @@ def _local_path(gcs_path: str, config: dict[str, Any]) -> Path:
 # ---------------------------------------------------------------------------
 # Client factory
 # ---------------------------------------------------------------------------
+
 
 def get_client(config: dict[str, Any]) -> storage.Client:
     """
@@ -136,10 +137,11 @@ def get_bucket(config: dict[str, Any]) -> storage.Bucket:
 # Upload operations
 # ---------------------------------------------------------------------------
 
+
 def upload_file(
     local_path: str | Path,
     config: dict[str, Any],
-    gcs_path: Optional[str] = None,
+    gcs_path: str | None = None,
 ) -> str:
     """
     Upload a local file to GCS.
@@ -257,10 +259,11 @@ def upload_bytes(
 # Download operations
 # ---------------------------------------------------------------------------
 
+
 def download_file(
     gcs_path: str,
     config: dict[str, Any],
-    local_path: Optional[str | Path] = None,
+    local_path: str | Path | None = None,
 ) -> Path:
     """
     Download a file from GCS to local disk.
@@ -319,7 +322,9 @@ def download_file(
 
     blob.download_to_filename(str(local_path))
 
-    logger.info(f"Download complete: {local_path} ({local_path.stat().st_size:,} bytes)")
+    logger.info(
+        f"Download complete: {local_path} ({local_path.stat().st_size:,} bytes)"
+    )
 
     return local_path
 
@@ -364,9 +369,10 @@ def download_bytes(
 # List and check operations
 # ---------------------------------------------------------------------------
 
+
 def list_blobs(
     config: dict[str, Any],
-    prefix: Optional[str] = None,
+    prefix: str | None = None,
 ) -> list[str]:
     """
     List all files in the GCS bucket, optionally filtered by prefix.
@@ -405,10 +411,7 @@ def list_blobs(
 
     logger.debug(f"Listing blobs in gs://{bucket.name}/{prefix or ''}")
 
-    blobs = [
-        blob.name
-        for blob in bucket.list_blobs(prefix=prefix)
-    ]
+    blobs = [blob.name for blob in bucket.list_blobs(prefix=prefix)]
 
     logger.debug(f"Found {len(blobs)} files")
 

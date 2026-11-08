@@ -9,10 +9,15 @@ CRS = "EPSG:26911"
 
 
 def test_tract_goes_to_the_area_it_overlaps_most():
-    tracts = gpd.GeoDataFrame({"geoid": ["A", "B"]}, geometry=[box(0, 0, 10, 10), box(20, 0, 30, 10)], crs=CRS)
+    tracts = gpd.GeoDataFrame(
+        {"geoid": ["A", "B"]}, geometry=[box(0, 0, 10, 10), box(20, 0, 30, 10)], crs=CRS
+    )
     areas = gpd.GeoDataFrame(
         {"name": ["West", "East"], "code": ["1", "2"]},
-        geometry=[box(-5, -5, 7, 15), box(7, -5, 40, 15)],  # A is 70% West, 30% East; B is all East
+        geometry=[
+            box(-5, -5, 7, 15),
+            box(7, -5, 40, 15),
+        ],  # A is 70% West, 30% East; B is all East
         crs=CRS,
     )
     out = assign_largest_overlap(tracts, areas, "name", "code").set_index("geoid")
@@ -25,7 +30,11 @@ def test_tract_goes_to_the_area_it_overlaps_most():
 
 
 def test_tract_outside_every_area_is_left_out():
-    tracts = gpd.GeoDataFrame({"geoid": ["A", "Z"]}, geometry=[box(0, 0, 1, 1), box(100, 100, 101, 101)], crs=CRS)
+    tracts = gpd.GeoDataFrame(
+        {"geoid": ["A", "Z"]},
+        geometry=[box(0, 0, 1, 1), box(100, 100, 101, 101)],
+        crs=CRS,
+    )
     areas = gpd.GeoDataFrame({"name": ["Only"]}, geometry=[box(0, 0, 5, 5)], crs=CRS)
     out = assign_largest_overlap(tracts, areas, "name")
     assert list(out["geoid"]) == ["A"]
@@ -63,18 +72,27 @@ def _fake_daily(state_code, county_code, start_date, end_date, config):
         return pd.DataFrame()
     days = pd.date_range(start_date, end_date, freq="D")
     rows = [
-        {"monitor_id": f"{state_code}-{county_code}-{n:04d}", "date": d, "pm25_value": 8.0 + n,
-         "latitude": 34.0, "longitude": -118.0, "monitor_name": f"m{n}",
-         "county_fips": state_code + county_code}
-        for d in days for n in (1, 2)
+        {
+            "monitor_id": f"{state_code}-{county_code}-{n:04d}",
+            "date": d,
+            "pm25_value": 8.0 + n,
+            "latitude": 34.0,
+            "longitude": -118.0,
+            "monitor_name": f"m{n}",
+            "county_fips": state_code + county_code,
+        }
+        for d in days
+        for n in (1, 2)
     ]
     return pd.DataFrame(rows)
 
 
 def test_year_ranges_split_at_new_year():
     ranges = epa_aqs._year_ranges(datetime(2025, 12, 29), datetime(2026, 1, 4))
-    assert ranges == [(datetime(2025, 12, 29), datetime(2025, 12, 31)),
-                      (datetime(2026, 1, 1), datetime(2026, 1, 4))]
+    assert ranges == [
+        (datetime(2025, 12, 29), datetime(2025, 12, 31)),
+        (datetime(2026, 1, 1), datetime(2026, 1, 4)),
+    ]
     assert len(epa_aqs._year_ranges(datetime(2026, 1, 5), datetime(2026, 12, 27))) == 1
 
 
@@ -87,17 +105,19 @@ def test_backfill_makes_one_request_per_county_per_year(monkeypatch):
 
     monkeypatch.setattr(epa_aqs, "_fetch_daily_readings", fetch)
     monkeypatch.setattr(epa_aqs, "_filter_to_buffer", lambda df, config: df)
-    monkeypatch.setattr(epa_aqs, "write_dataframe", lambda df, table, config, **kw: written.append(df))
+    monkeypatch.setattr(
+        epa_aqs, "write_dataframe", lambda df, table, config, **kw: written.append(df)
+    )
 
     # 52 weeks from Jan 6, 2025 to Dec 29, 2025; the last week ends Jan 4, 2026
     first = datetime(2025, 1, 6)
     last = first + timedelta(weeks=51)
     result = epa_aqs.pull_pm25_range(AQS_CONFIG, first, last)
 
-    assert len(calls) == 6                      # 3 counties x 2 calendar years, not 3 x 52
+    assert len(calls) == 6  # 3 counties x 2 calendar years, not 3 x 52
     assert len(result["weeks_written"]) == 52
     assert result["weeks_missing"] == []
-    assert len(written) == 1                    # one write for all weeks
+    assert len(written) == 1  # one write for all weeks
     df = written[0]
     assert df["week_start_date"].nunique() == 52
     assert (df.groupby("week_start_date")["reading_count"].max() == 7).all()
@@ -107,13 +127,17 @@ def test_backfill_reports_weeks_without_city_readings(monkeypatch):
     def fetch(**kw):
         if kw["county_code"] == "037" and kw["start_date"].month == 1:
             df = _fake_daily(**kw)
-            return df[df["date"] >= datetime(2026, 1, 12)]  # city has no data the first week
+            return df[
+                df["date"] >= datetime(2026, 1, 12)
+            ]  # city has no data the first week
         return _fake_daily(**kw)
 
     monkeypatch.setattr(epa_aqs, "_fetch_daily_readings", fetch)
     monkeypatch.setattr(epa_aqs, "_filter_to_buffer", lambda df, config: df)
     monkeypatch.setattr(epa_aqs, "write_dataframe", lambda *a, **k: None)
 
-    result = epa_aqs.pull_pm25_range(AQS_CONFIG, datetime(2026, 1, 5), datetime(2026, 1, 12))
+    result = epa_aqs.pull_pm25_range(
+        AQS_CONFIG, datetime(2026, 1, 5), datetime(2026, 1, 12)
+    )
     assert result["weeks_missing"] == ["2026-01-05"]
     assert result["weeks_written"] == ["2026-01-12"]

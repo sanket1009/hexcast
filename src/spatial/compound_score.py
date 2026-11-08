@@ -79,6 +79,7 @@ VALID_CLASSES = {"LOW", "ELEVATED", "HIGH", "CRITICAL"}
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def compute_compound_score(
     config: dict[str, Any],
     week_start: datetime | None = None,
@@ -106,8 +107,7 @@ def compute_compound_score(
 
     week_str = week_start.strftime("%Y-%m-%d")
     logger.info(
-        f"Computing compound burden score for {config['city_name']} "
-        f"week of {week_str}"
+        f"Computing compound burden score for {config['city_name']} week of {week_str}"
     )
 
     # Step 1 — Load the three signals
@@ -130,7 +130,9 @@ def compute_compound_score(
     _validate_output(scores_df, signals_df)
     # Replace this week's rows for this city; re-runs do not duplicate
     write_dataframe(
-        scores_df, "compound_scores", config,
+        scores_df,
+        "compound_scores",
+        config,
         write_disposition=REPLACE_PARTITION,
     )
 
@@ -148,6 +150,7 @@ def compute_compound_score(
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _load_signals(config: dict[str, Any], week_str: str) -> pd.DataFrame:
     """

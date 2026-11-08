@@ -60,12 +60,20 @@ def pull_reporting_areas(config: dict[str, Any]) -> pd.DataFrame:
 
     out = tracts[["geoid"]].copy()
     for level, layer in levels.items():
-        fields = [layer["name_field"]] + ([layer["id_field"]] if layer.get("id_field") else [])
+        fields = [layer["name_field"]] + (
+            [layer["id_field"]] if layer.get("id_field") else []
+        )
         areas = fetch_layer(layer["url"], fields).to_crs(crs)
-        assigned = assign_largest_overlap(tracts, areas, layer["name_field"], layer.get("id_field"))
-        assigned = assigned.rename(columns={
-            "area_name": f"{level}_name", "area_id": f"{level}_id", "share": f"{level}_share",
-        })
+        assigned = assign_largest_overlap(
+            tracts, areas, layer["name_field"], layer.get("id_field")
+        )
+        assigned = assigned.rename(
+            columns={
+                "area_name": f"{level}_name",
+                "area_id": f"{level}_id",
+                "share": f"{level}_share",
+            }
+        )
         out = out.merge(assigned, on="geoid", how="left")
         _log_level(level, out, len(areas))
 
@@ -123,7 +131,9 @@ def assign_largest_overlap(
     Both inputs must share a projected CRS. Tracts touching no area are left out.
     """
     keep = [name_field] + ([id_field] if id_field else [])
-    pieces = gpd.overlay(tracts[["geoid", "geometry"]], areas[keep + ["geometry"]], how="intersection")
+    pieces = gpd.overlay(
+        tracts[["geoid", "geometry"]], areas[keep + ["geometry"]], how="intersection"
+    )
     pieces["piece_area"] = pieces.geometry.area
     pieces = pieces[pieces["piece_area"] > 0]
 
@@ -131,11 +141,15 @@ def assign_largest_overlap(
     # include ocean that no reporting area covers, and that is not a split.
     covered = pieces.groupby("geoid")["piece_area"].sum()
     best = pieces.sort_values("piece_area", ascending=False).drop_duplicates("geoid")
-    result = pd.DataFrame({
-        "geoid": best["geoid"].values,
-        "area_name": best[name_field].astype(str).values,
-        "share": (best["piece_area"].values / covered.loc[best["geoid"]].values).round(3),
-    })
+    result = pd.DataFrame(
+        {
+            "geoid": best["geoid"].values,
+            "area_name": best[name_field].astype(str).values,
+            "share": (
+                best["piece_area"].values / covered.loc[best["geoid"]].values
+            ).round(3),
+        }
+    )
     if id_field:
         result["area_id"] = best[id_field].astype(str).values
     return result

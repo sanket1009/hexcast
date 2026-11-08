@@ -52,6 +52,7 @@ MIN_PIXEL_COUNT = 10
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def process_lst_raster(
     config: dict[str, Any],
     week_start: datetime | None = None,
@@ -74,17 +75,12 @@ def process_lst_raster(
     if week_start is None:
         today = datetime.now()
         week_start = today - timedelta(days=today.weekday())
-        week_start = week_start.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     full_fips = config["full_fips"]
     week_str = week_start.strftime("%Y-%m-%d")
 
-    logger.info(
-        f"Processing LST raster for {config['city_name']} "
-        f"week of {week_str}"
-    )
+    logger.info(f"Processing LST raster for {config['city_name']} week of {week_str}")
 
     # Step 1 — Download GeoTIFF from GCS to local disk
     gcs_path = f"rasters/lst/{full_fips}_{week_str}.tif"
@@ -115,7 +111,9 @@ def process_lst_raster(
 
     # Step 7 — Validate and write to BigQuery
     _validate_output(zonal_df)
-    write_dataframe(zonal_df, "lst_tract_stats", config, write_disposition=REPLACE_PARTITION)
+    write_dataframe(
+        zonal_df, "lst_tract_stats", config, write_disposition=REPLACE_PARTITION
+    )
 
     # Step 8 — Clean up local raster file
     # GeoTIFFs are large — don't keep them on disk after processing
@@ -135,6 +133,7 @@ def process_lst_raster(
 # Private functions
 # ---------------------------------------------------------------------------
 
+
 def _load_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
     """
     Load tract polygon geometries from GCS GeoParquet.
@@ -149,6 +148,7 @@ def _load_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
         Tract polygons in EPSG:4326 with geoid column.
     """
     from pathlib import Path
+
     full_fips = config["full_fips"]
 
     # Try local GeoParquet first — faster than re-downloading
@@ -163,6 +163,7 @@ def _load_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
         # Download from GCS
         logger.debug("Downloading tract geometries from GCS")
         from src.utils.gcs import download_file
+
         gcs_path = f"tract_geometries/{full_fips}.parquet"
         downloaded = download_file(gcs_path, config, local_path=local_path)
         gdf = gpd.read_parquet(downloaded)
@@ -173,7 +174,11 @@ def _load_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
     elif gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs("EPSG:4326")
 
-    cols = ["geoid", "aland", "geometry"] if "aland" in gdf.columns else ["geoid", "geometry"]
+    cols = (
+        ["geoid", "aland", "geometry"]
+        if "aland" in gdf.columns
+        else ["geoid", "geometry"]
+    )
     return gdf[cols]
 
 
@@ -220,8 +225,7 @@ def _compute_zonal_stats(
     with rasterio.open(raster_path) as src:
         raster_crs = src.crs.to_epsg()
         logger.debug(
-            f"Raster CRS: EPSG:{raster_crs}, "
-            f"Tract CRS: EPSG:{tracts_gdf.crs.to_epsg()}"
+            f"Raster CRS: EPSG:{raster_crs}, Tract CRS: EPSG:{tracts_gdf.crs.to_epsg()}"
         )
         if raster_crs != 4326:
             raise ValueError(
@@ -277,7 +281,7 @@ def _compute_zonal_stats(
     # them (~100 of 200k at 19 °C in the June 22, 2026 run), which would
     # otherwise skew the city z-score. NaN them on geography, not pixels.
     if "aland" in tracts_gdf.columns:
-        water_only = (tracts_gdf["aland"].fillna(0).values == 0)
+        water_only = tracts_gdf["aland"].fillna(0).values == 0
         if water_only.any():
             logger.info(
                 f"{water_only.sum()} water-only tracts (land area 0) set to NaN: "
@@ -352,17 +356,10 @@ def _compute_zscores(df: pd.DataFrame) -> pd.DataFrame:
 
     # Compute z-score only for valid tracts
     df["lst_zscore"] = np.nan
-    df.loc[valid_mask, "lst_zscore"] = (
-        (valid_lst - city_mean) / city_std
-    ).round(4)
+    df.loc[valid_mask, "lst_zscore"] = ((valid_lst - city_mean) / city_std).round(4)
 
     # Also compute percentile rank
-    df["lst_percentile"] = (
-        df["lst_mean_celsius"]
-        .rank(pct=True)
-        .mul(100)
-        .round(1)
-    )
+    df["lst_percentile"] = df["lst_mean_celsius"].rank(pct=True).mul(100).round(1)
 
     return df
 
@@ -406,9 +403,7 @@ def _compute_yoy_anomaly(
     last_year_week = week_start - timedelta(weeks=52)
     last_year_str = last_year_week.strftime("%Y-%m-%d")
 
-    logger.debug(
-        f"Looking up LST for same week last year: {last_year_str}"
-    )
+    logger.debug(f"Looking up LST for same week last year: {last_year_str}")
 
     try:
         # Query last year's LST for same city and week
@@ -435,9 +430,7 @@ def _compute_yoy_anomaly(
         df = df.merge(last_year_df, on="geoid", how="left")
 
         # Compute anomaly
-        df["lst_yoy_anomaly"] = (
-            df["lst_mean_celsius"] - df["lst_last_year"]
-        ).round(2)
+        df["lst_yoy_anomaly"] = (df["lst_mean_celsius"] - df["lst_last_year"]).round(2)
 
         # Drop the intermediate column
         df = df.drop(columns=["lst_last_year"])

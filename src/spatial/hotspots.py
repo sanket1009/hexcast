@@ -54,6 +54,7 @@ logger = get_logger(__name__)
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def detect_hotspots(
     config: dict[str, Any],
     week_start: datetime | None = None,
@@ -86,17 +87,12 @@ def detect_hotspots(
     if week_start is None:
         today = datetime.now()
         week_start = today - timedelta(days=today.weekday())
-        week_start = week_start.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     full_fips = config["full_fips"]
     week_str = week_start.strftime("%Y-%m-%d")
 
-    logger.info(
-        f"Detecting hotspots for {config['city_name']} "
-        f"week of {week_str}"
-    )
+    logger.info(f"Detecting hotspots for {config['city_name']} week of {week_str}")
 
     # Step 1 — Load compound scores from BigQuery
     scores_df = _load_compound_scores(config, week_str)
@@ -156,7 +152,9 @@ def detect_hotspots(
     # Step 9 — Validate and write
     _validate_output(result_df, config)
     write_dataframe(
-        result_df, "hotspot_detection", config,
+        result_df,
+        "hotspot_detection",
+        config,
         write_disposition=REPLACE_PARTITION,
     )
 
@@ -177,6 +175,7 @@ def detect_hotspots(
 # Private functions
 # ---------------------------------------------------------------------------
 
+
 def _load_compound_scores(
     config: dict[str, Any],
     week_str: str,
@@ -196,8 +195,7 @@ def _load_compound_scores(
 
     if df.empty:
         raise ValueError(
-            f"No compound scores for week {week_str}. "
-            f"Run compound_score.py first."
+            f"No compound scores for week {week_str}. Run compound_score.py first."
         )
 
     return df
@@ -223,6 +221,7 @@ def _load_tract_geometries(
         gdf = gpd.read_parquet(local_path)
     else:
         from src.utils.gcs import download_file
+
         gcs_path = f"tract_geometries/{full_fips}.parquet"
         downloaded = download_file(gcs_path, config, local_path=local_path)
         gdf = gpd.read_parquet(downloaded)
@@ -297,8 +296,7 @@ def _compute_morans_i(
     random_seed = config["ml"]["random_seed"]
 
     logger.debug(
-        f"Computing Moran's I with {n_permutations} permutations "
-        f"(seed={random_seed})"
+        f"Computing Moran's I with {n_permutations} permutations (seed={random_seed})"
     )
 
     # esda seeds permutations from NumPy's global generator, not a seed argument
@@ -381,7 +379,7 @@ def _compute_gi_star(
     high_sig = config["hotspot_significance"]["high"]
 
     hotspot_classes = []
-    for z, p in zip(gi.Zs, gi.p_norm):
+    for z, p in zip(gi.Zs, gi.p_norm, strict=False):
         if z > 0 and p < high_sig:
             hotspot_classes.append("HOTSPOT_99")
         elif z > 0 and p < standard_sig:
@@ -393,16 +391,23 @@ def _compute_gi_star(
         else:
             hotspot_classes.append("NOT_SIGNIFICANT")
 
-    df = pd.DataFrame({
-        "geoid": geoids,
-        "gi_star_zscore": gi.Zs.round(4),
-        "gi_star_pvalue": gi.p_norm.round(6),
-        "hotspot_class": hotspot_classes,
-    })
+    df = pd.DataFrame(
+        {
+            "geoid": geoids,
+            "gi_star_zscore": gi.Zs.round(4),
+            "gi_star_pvalue": gi.p_norm.round(6),
+            "hotspot_class": hotspot_classes,
+        }
+    )
 
     # Log hotspot summary
-    for cls in ["HOTSPOT_99", "HOTSPOT_95", "NOT_SIGNIFICANT",
-                "COLDSPOT_95", "COLDSPOT_99"]:
+    for cls in [
+        "HOTSPOT_99",
+        "HOTSPOT_95",
+        "NOT_SIGNIFICANT",
+        "COLDSPOT_95",
+        "COLDSPOT_99",
+    ]:
         count = (df["hotspot_class"] == cls).sum()
         if count > 0:
             logger.info(f"  {cls}: {count:,} tracts")
@@ -417,9 +422,11 @@ def _validate_output(df: pd.DataFrame, config: dict[str, Any]) -> None:
 
     # Check valid hotspot classes
     valid_classes = {
-        "HOTSPOT_99", "HOTSPOT_95",
+        "HOTSPOT_99",
+        "HOTSPOT_95",
         "NOT_SIGNIFICANT",
-        "COLDSPOT_95", "COLDSPOT_99",
+        "COLDSPOT_95",
+        "COLDSPOT_99",
     }
     invalid = set(df["hotspot_class"].unique()) - valid_classes
     if invalid:

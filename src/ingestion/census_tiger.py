@@ -43,7 +43,7 @@ logger = get_logger(__name__)
 # Documentation: https://tigerweb.geo.census.gov/arcgis/rest/services
 TIGER_API_BASE = (
     "https://tigerweb.geo.census.gov/arcgis/rest/services"
-    "/TIGERweb/tigerWMS_Census2020/MapServer/6/query"   # layer 6 = Census Tracts
+    "/TIGERweb/tigerWMS_Census2020/MapServer/6/query"  # layer 6 = Census Tracts
 )
 
 # Census ACS API endpoint for demographic data
@@ -57,6 +57,7 @@ ACS_API_BASE = "https://api.census.gov/data/2024/acs/acs5"
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
+
 
 def pull_tract_geometries(config: dict[str, Any]) -> gpd.GeoDataFrame:
     """
@@ -176,22 +177,25 @@ def pull_buffer_tracts(config: dict[str, Any]) -> pd.DataFrame:
         cent = gdf.to_crs(config["crs_projected"]).geometry.centroid.to_crs("EPSG:4326")
         gdf["centroid_lon"], gdf["centroid_lat"] = cent.x, cent.y
 
-        inside = (
-            gdf["centroid_lon"].between(west, east)
-            & gdf["centroid_lat"].between(south, north)
+        inside = gdf["centroid_lon"].between(west, east) & gdf["centroid_lat"].between(
+            south, north
         )
         kept = gdf[inside]
         logger.info(
             f"Buffer tracts {fips}: kept {len(kept)} of {len(gdf)}, "
             f"population {kept['population'].sum():,.0f}"
         )
-        parts.append(pd.DataFrame({
-            "geoid": kept["geoid"],
-            "county_fips": fips,
-            "population": kept["population"],
-            "centroid_lat": kept["centroid_lat"],
-            "centroid_lon": kept["centroid_lon"],
-        }))
+        parts.append(
+            pd.DataFrame(
+                {
+                    "geoid": kept["geoid"],
+                    "county_fips": fips,
+                    "population": kept["population"],
+                    "centroid_lat": kept["centroid_lat"],
+                    "centroid_lon": kept["centroid_lon"],
+                }
+            )
+        )
 
     df = pd.concat(parts, ignore_index=True)
     df["city_fips"] = config["full_fips"]
@@ -207,6 +211,7 @@ def pull_buffer_tracts(config: dict[str, Any]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _fetch_tiger_geometries(
     state_fips: str,
@@ -231,7 +236,9 @@ def _fetch_tiger_geometries(
         Tract geometries in EPSG:4326 with columns:
         geoid, name, aland, geometry
     """
-    logger.debug(f"Fetching TIGER geometries for state {state_fips} county {county_fips}")
+    logger.debug(
+        f"Fetching TIGER geometries for state {state_fips} county {county_fips}"
+    )
 
     # TIGER API query parameters
     # WHERE clause filters to the specific county using FIPS codes
@@ -243,8 +250,8 @@ def _fetch_tiger_geometries(
         "outFields": "GEOID,NAME,AREALAND",
         "f": "geojson",
         "returnGeometry": "true",
-        "outSR": "4326",          # return coordinates in WGS84 (EPSG:4326)
-        "resultRecordCount": 5000, # max records per request — enough for any county
+        "outSR": "4326",  # return coordinates in WGS84 (EPSG:4326)
+        "resultRecordCount": 5000,  # max records per request — enough for any county
     }
 
     logger.debug(f"TIGER API params: {params}")
@@ -271,11 +278,13 @@ def _fetch_tiger_geometries(
     gdf.columns = [col.lower() for col in gdf.columns]
 
     # Rename columns to our standard names
-    gdf = gdf.rename(columns={
-        "geoid": "geoid",
-        "name": "name",
-        "arealand": "aland",  # land area in square meters
-    })
+    gdf = gdf.rename(
+        columns={
+            "geoid": "geoid",
+            "name": "name",
+            "arealand": "aland",  # land area in square meters
+        }
+    )
 
     # Keep only the columns we need
     gdf = gdf[["geoid", "name", "aland", "geometry"]]
@@ -324,7 +333,7 @@ def _fetch_acs_demographics(
 
     params = {
         "get": "B01003_001E,B19013_001E,NAME",
-        "for": f"tract:*",
+        "for": "tract:*",
         "in": f"state:{state_fips} county:{county_fips}",
         "key": api_key,
     }
@@ -352,10 +361,12 @@ def _fetch_acs_demographics(
     df["geoid"] = df["state"] + df["county"] + df["tract"]
 
     # Rename and cast columns
-    df = df.rename(columns={
-        "B01003_001E": "population",
-        "B19013_001E": "median_income",
-    })
+    df = df.rename(
+        columns={
+            "B01003_001E": "population",
+            "B19013_001E": "median_income",
+        }
+    )
 
     # Cast to numeric — ACS API returns strings
     # Negative values (-666666666) indicate missing data — replace with NaN
@@ -475,16 +486,13 @@ def _validate_output(
 
     # Check CRS is correct
     if gdf.crs.to_epsg() != 4326:
-        raise ValueError(
-            f"GeoDataFrame CRS is {gdf.crs} — expected EPSG:4326"
-        )
+        raise ValueError(f"GeoDataFrame CRS is {gdf.crs} — expected EPSG:4326")
 
     # Check GEOIDs are 11 digits
     invalid_geoids = gdf[gdf["geoid"].str.len() != 11]
     if len(invalid_geoids) > 0:
         raise ValueError(
-            f"{len(invalid_geoids)} tracts have invalid GEOIDs "
-            f"(expected 11 digits)"
+            f"{len(invalid_geoids)} tracts have invalid GEOIDs (expected 11 digits)"
         )
 
     logger.info(
@@ -548,9 +556,16 @@ def _write_to_bigquery(
     # Select only tabular columns — BigQuery doesn't store geometry natively
     # in the same way as PostGIS. We keep geometry in GeoParquet on GCS.
     tabular_cols = [
-        "geoid", "name", "aland", "population", "median_income",
-        "tract_area_km2", "centroid_lat", "centroid_lon",
-        "city_fips", "state_fips",
+        "geoid",
+        "name",
+        "aland",
+        "population",
+        "median_income",
+        "tract_area_km2",
+        "centroid_lat",
+        "centroid_lon",
+        "city_fips",
+        "state_fips",
     ]
 
     df_tabular = pd.DataFrame(gdf[tabular_cols])

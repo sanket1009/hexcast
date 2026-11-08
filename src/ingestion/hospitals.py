@@ -44,8 +44,9 @@ Usage:
 """
 
 import io
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import geopandas as gpd
 import pandas as pd
@@ -86,6 +87,7 @@ ED_LEVEL_RANK = {"comprehensive": 0, "basic": 1, "standby": 2}
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
+
 
 def pull_hospital_locations(config: dict[str, Any]) -> gpd.GeoDataFrame:
     """
@@ -150,6 +152,7 @@ def pull_hospital_locations(config: dict[str, Any]) -> gpd.GeoDataFrame:
 # Source: California CDPH
 # ---------------------------------------------------------------------------
 
+
 def _fetch_cdph_ca(config: dict[str, Any]) -> pd.DataFrame:
     """Licensed general acute care hospitals in the city and neighbor counties."""
     full_fips = config["full_fips"]
@@ -157,7 +160,9 @@ def _fetch_cdph_ca(config: dict[str, Any]) -> pd.DataFrame:
 
     facilities = _download_ckan_csv(CDPH_LOCATIONS_RESOURCE)
     services = _download_ckan_csv(CDPH_SERVICES_RESOURCE)
-    logger.info(f"Downloaded {len(facilities):,} CDPH facilities, {len(services):,} service rows")
+    logger.info(
+        f"Downloaded {len(facilities):,} CDPH facilities, {len(services):,} service rows"
+    )
 
     df = facilities[
         facilities["FIPS_COUNTY_CODE"].isin(counties)
@@ -180,7 +185,9 @@ def _fetch_cdph_ca(config: dict[str, Any]) -> pd.DataFrame:
         & df["longitude"].notna()
         & (df["LICENSE_STATUS_DESCRIPTION"].str.upper() == "ACTIVE")
     ]
-    logger.info(f"Kept {len(df)} of {n_all} general acute care rows (beds > 0, active, located)")
+    logger.info(
+        f"Kept {len(df)} of {n_all} general acute care rows (beds > 0, active, located)"
+    )
 
     # Emergency department level from the Services file (on-site only)
     ed = services[
@@ -188,29 +195,34 @@ def _fetch_cdph_ca(config: dict[str, Any]) -> pd.DataFrame:
         & (services["IS_OFFSITE_SERVICE"].fillna("N").str.upper() != "Y")
     ].copy()
     ed["ed_level"] = ed["SERVICE_TYPE_NAME"].map(ED_SERVICE_LEVELS)
-    ed = (
-        ed.sort_values("ed_level", key=lambda s: s.map(ED_LEVEL_RANK))
-        .drop_duplicates("FACID")[["FACID", "ed_level"]]
-    )
+    ed = ed.sort_values("ed_level", key=lambda s: s.map(ED_LEVEL_RANK)).drop_duplicates(
+        "FACID"
+    )[["FACID", "ed_level"]]
     df = df.merge(ed, on="FACID", how="left")
     df["has_ed"] = df["ed_level"].notna()
 
-    return pd.DataFrame({
-        "hospital_id": df["FACID"],
-        "name": df["FACNAME"].str.title(),
-        "address": df["ADDRESS"],
-        "city": df["CITY"].str.title(),
-        "zip": df["ZIP"],
-        "latitude": df["latitude"],
-        "longitude": df["longitude"],
-        "beds": df["beds"].astype(int),
-        "ed_level": df["ed_level"],
-        "has_ed": df["has_ed"],
-        "trauma_level": df["TRAUMA_CTR"].fillna("None"),
-        "data_date": df["DATA_DATE"],
-        "source": "cdph_ca",
-        "county_fips": df["FIPS_COUNTY_CODE"],
-    }).sort_values("hospital_id").reset_index(drop=True)
+    return (
+        pd.DataFrame(
+            {
+                "hospital_id": df["FACID"],
+                "name": df["FACNAME"].str.title(),
+                "address": df["ADDRESS"],
+                "city": df["CITY"].str.title(),
+                "zip": df["ZIP"],
+                "latitude": df["latitude"],
+                "longitude": df["longitude"],
+                "beds": df["beds"].astype(int),
+                "ed_level": df["ed_level"],
+                "has_ed": df["has_ed"],
+                "trauma_level": df["TRAUMA_CTR"].fillna("None"),
+                "data_date": df["DATA_DATE"],
+                "source": "cdph_ca",
+                "county_fips": df["FIPS_COUNTY_CODE"],
+            }
+        )
+        .sort_values("hospital_id")
+        .reset_index(drop=True)
+    )
 
 
 def _download_ckan_csv(resource_id: str) -> pd.DataFrame:
@@ -236,6 +248,7 @@ HOSPITAL_SOURCES: dict[str, Callable[[dict[str, Any]], pd.DataFrame]] = {
 # Validation and output
 # ---------------------------------------------------------------------------
 
+
 def _validate_output(gdf: gpd.GeoDataFrame, config: dict[str, Any]) -> None:
     """Sanity-check hospitals before saving."""
     if gdf.empty:
@@ -260,7 +273,9 @@ def _validate_output(gdf: gpd.GeoDataFrame, config: dict[str, Any]) -> None:
     )
 
 
-def _drop_outside_bbox(gdf: gpd.GeoDataFrame, config: dict[str, Any]) -> gpd.GeoDataFrame:
+def _drop_outside_bbox(
+    gdf: gpd.GeoDataFrame, config: dict[str, Any]
+) -> gpd.GeoDataFrame:
     """
     Drop hospitals outside the buffered city bounding box.
 
@@ -272,9 +287,8 @@ def _drop_outside_bbox(gdf: gpd.GeoDataFrame, config: dict[str, Any]) -> gpd.Geo
     west, south, east, north = get_buffered_bbox(
         config, config["healthcare"].get("buffer_km", 0.0)
     )
-    inside = (
-        gdf["longitude"].between(west, east)
-        & gdf["latitude"].between(south, north)
+    inside = gdf["longitude"].between(west, east) & gdf["latitude"].between(
+        south, north
     )
     if (~inside).any():
         dropped_city = gdf.loc[~inside & gdf["in_city"], "name"].tolist()

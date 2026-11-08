@@ -69,7 +69,9 @@ def build_tract_risks(config: dict[str, Any], week_str: str) -> list[TractRisk]:
     # model cannot write "100th percentile" for a tract at 99.8. Ranked on raw
     # burden, not the percentile (rounded to 0.1), so ties only happen on
     # identical scores; the weekly report ranks the same way.
-    scores["burden_rank"] = scores["raw_burden"].rank(ascending=False, method="min").astype(int)
+    scores["burden_rank"] = (
+        scores["raw_burden"].rank(ascending=False, method="min").astype(int)
+    )
     tract_count = len(scores)
 
     targets = scores[scores["burden_class"].isin(URGENCY_BY_CLASS)]
@@ -118,9 +120,12 @@ def _load_week(config: dict[str, Any], week_str: str) -> pd.DataFrame:
     return read_query(query, config)
 
 
-def _to_tract_risk(row: pd.Series, config: dict[str, Any], tract_count: int) -> TractRisk:
+def _to_tract_risk(
+    row: pd.Series, config: dict[str, Any], tract_count: int
+) -> TractRisk:
     drivers = [
-        name for name, col in DRIVER_COMPONENTS.items()
+        name
+        for name, col in DRIVER_COMPONENTS.items()
         if row[f"{col}_pct"] >= TOP_QUARTILE
     ]
     if not drivers:

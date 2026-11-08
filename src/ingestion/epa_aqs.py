@@ -83,6 +83,7 @@ SAMPLE_DURATION_PRIORITY = {"24 HOUR": 0, "24-HR BLK AVG": 1, "1 HOUR": 2}
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def pull_pm25_readings(
     config: dict[str, Any],
     week_start: datetime | None = None,
@@ -158,7 +159,9 @@ def pull_pm25_readings(
     weekly_df = _summarize_week(daily_df, week_start, config)
 
     # Replace this week and city, so retries and reruns never duplicate rows
-    write_dataframe(weekly_df, "epa_pm25_raw", config, write_disposition=REPLACE_PARTITION)
+    write_dataframe(
+        weekly_df, "epa_pm25_raw", config, write_disposition=REPLACE_PARTITION
+    )
 
     logger.info(
         f"EPA AQS ingestion complete: {len(weekly_df)} monitors, "
@@ -213,8 +216,12 @@ def pull_pm25_range(
     frames, written, missing = [], [], []
     for monday in mondays:
         in_week = (
-            daily_df[(daily_df["date"] >= monday) & (daily_df["date"] < monday + timedelta(days=7))]
-            if not daily_df.empty else daily_df
+            daily_df[
+                (daily_df["date"] >= monday)
+                & (daily_df["date"] < monday + timedelta(days=7))
+            ]
+            if not daily_df.empty
+            else daily_df
         )
         try:
             frames.append(_summarize_week(in_week, monday, config))
@@ -225,9 +232,13 @@ def pull_pm25_range(
 
     if frames:
         all_weeks = pd.concat(frames, ignore_index=True)
-        write_dataframe(all_weeks, "epa_pm25_raw", config, write_disposition=REPLACE_PARTITION)
+        write_dataframe(
+            all_weeks, "epa_pm25_raw", config, write_disposition=REPLACE_PARTITION
+        )
     rows = sum(len(f) for f in frames)
-    logger.info(f"PM2.5 backfill: {len(written)} weeks written ({rows:,} rows), {len(missing)} missing")
+    logger.info(
+        f"PM2.5 backfill: {len(written)} weeks written ({rows:,} rows), {len(missing)} missing"
+    )
     return {"weeks_written": written, "weeks_missing": missing, "rows": rows}
 
 
@@ -253,19 +264,23 @@ def _fetch_all_counties(
         is_city = state_code + county_code == full_fips
         for b, e in _year_ranges(start, end):
             try:
-                parts.append(_fetch_daily_readings(
-                    state_code=state_code,
-                    county_code=county_code,
-                    start_date=b,
-                    end_date=e,
-                    config=config,
-                ))
+                parts.append(
+                    _fetch_daily_readings(
+                        state_code=state_code,
+                        county_code=county_code,
+                        start_date=b,
+                        end_date=e,
+                        config=config,
+                    )
+                )
             except (ValueError, requests.exceptions.RequestException) as err:
                 # The city county is required; a failed neighbor only
                 # thins out Kriging support, so log it and carry on
                 if is_city:
                     raise
-                logger.warning(f"Skipping neighbor county {state_code}{county_code}: {err}")
+                logger.warning(
+                    f"Skipping neighbor county {state_code}{county_code}: {err}"
+                )
 
     parts = [d for d in parts if not d.empty]
     if not parts:
@@ -320,6 +335,7 @@ def _summarize_week(
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _get_most_recent_monday() -> datetime:
     """
@@ -451,16 +467,21 @@ def _fetch_daily_readings(
     ).sort_values("_prio")
     df = df.drop_duplicates(subset=["site_number", "poc", "date_local"])
 
-    df = df.rename(columns={
-        "arithmetic_mean": "pm25_value",
-        "date_local": "date",
-        "local_site_name": "monitor_name",
-    })
+    df = df.rename(
+        columns={
+            "arithmetic_mean": "pm25_value",
+            "date_local": "date",
+            "local_site_name": "monitor_name",
+        }
+    )
 
     # One monitor = one site. Format: SS-CCC-NNNN (e.g. 06-037-1103)
     df["monitor_id"] = (
-        state_code + "-" + county_code + "-" +
-        df["site_number"].astype(str).str.zfill(4)
+        state_code
+        + "-"
+        + county_code
+        + "-"
+        + df["site_number"].astype(str).str.zfill(4)
     )
     df["county_fips"] = state_code + county_code
 
@@ -475,15 +496,12 @@ def _fetch_daily_readings(
 
     # Sites with several instruments (POCs): average them into one daily
     # value per site, so each day counts once in the weekly summary
-    df = (
-        df.groupby(["monitor_id", "date"], as_index=False)
-        .agg(
-            pm25_value=("pm25_value", "mean"),
-            latitude=("latitude", "first"),
-            longitude=("longitude", "first"),
-            monitor_name=("monitor_name", "first"),
-            county_fips=("county_fips", "first"),
-        )
+    df = df.groupby(["monitor_id", "date"], as_index=False).agg(
+        pm25_value=("pm25_value", "mean"),
+        latitude=("latitude", "first"),
+        longitude=("longitude", "first"),
+        monitor_name=("monitor_name", "first"),
+        county_fips=("county_fips", "first"),
     )
 
     return df
@@ -524,17 +542,21 @@ def _aggregate_to_weekly(
     logger.debug(f"Aggregating {len(daily_df)} daily readings to weekly summaries")
 
     # Group by monitor and aggregate
-    weekly = daily_df.groupby("monitor_id").agg(
-        pm25_mean=("pm25_value", "mean"),
-        pm25_max=("pm25_value", "max"),
-        pm25_min=("pm25_value", "min"),
-        pm25_std=("pm25_value", "std"),
-        reading_count=("pm25_value", "count"),
-        latitude=("latitude", "first"),
-        longitude=("longitude", "first"),
-        monitor_name=("monitor_name", "first"),
-        county_fips=("county_fips", "first"),
-    ).reset_index()
+    weekly = (
+        daily_df.groupby("monitor_id")
+        .agg(
+            pm25_mean=("pm25_value", "mean"),
+            pm25_max=("pm25_value", "max"),
+            pm25_min=("pm25_value", "min"),
+            pm25_std=("pm25_value", "std"),
+            reading_count=("pm25_value", "count"),
+            latitude=("latitude", "first"),
+            longitude=("longitude", "first"),
+            monitor_name=("monitor_name", "first"),
+            county_fips=("county_fips", "first"),
+        )
+        .reset_index()
+    )
 
     # Round PM2.5 values to 2 decimal places
     for col in ["pm25_mean", "pm25_max", "pm25_min", "pm25_std"]:
@@ -577,9 +599,11 @@ def _filter_to_buffer(
         gpd.points_from_xy(df["longitude"], df["latitude"]),
         crs=config["crs"],
     ).to_crs(config["crs_projected"])
-    city_box = gpd.GeoSeries(
-        [box(*get_bbox_tuple(config))], crs=config["crs"]
-    ).to_crs(config["crs_projected"]).iloc[0]
+    city_box = (
+        gpd.GeoSeries([box(*get_bbox_tuple(config))], crs=config["crs"])
+        .to_crs(config["crs_projected"])
+        .iloc[0]
+    )
 
     df = df.copy()
     df["distance_to_bbox_km"] = (points.distance(city_box).values / 1000).round(1)
@@ -680,9 +704,7 @@ def _validate_output(
         )
 
     # Check all monitors have coordinates
-    missing_coords = df[
-        df["latitude"].isna() | df["longitude"].isna()
-    ].shape[0]
+    missing_coords = df[df["latitude"].isna() | df["longitude"].isna()].shape[0]
     if missing_coords > 0:
         raise ValueError(
             f"{missing_coords} monitors have missing coordinates — "

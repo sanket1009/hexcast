@@ -34,7 +34,6 @@ from chbindex_common import (
 
 
 def build_spatial_dag(city: str):
-
     @dag(
         dag_id=f"spatial_transform_{city}",
         description=f"Kriging, LST, healthcare access, compound score and hotspots for {city}",
@@ -56,14 +55,15 @@ def build_spatial_dag(city: str):
         tags=["chbindex", "spatial", city],
     )
     def spatial_transform():
-
         @task
         def resolve_week() -> str:
             from datetime import date
 
             from src.utils.weeks import monday_of
 
-            week = monday_of(date.fromisoformat(get_current_context()["params"]["week_start"]))
+            week = monday_of(
+                date.fromisoformat(get_current_context()["params"]["week_start"])
+            )
             print(f"Spatial transform for week starting {week}, {city}")
             return week.isoformat()
 
@@ -77,7 +77,9 @@ def build_spatial_dag(city: str):
         def process_lst(week: str) -> int:
             from src.spatial.lst_processing import process_lst_raster
 
-            return len(process_lst_raster(project_config(city), week_start=week_start(week)))
+            return len(
+                process_lst_raster(project_config(city), week_start=week_start(week))
+            )
 
         @task
         def healthcare_access(week: str) -> int:
@@ -89,7 +91,9 @@ def build_spatial_dag(city: str):
         def compound_score(week: str) -> dict:
             from src.spatial.compound_score import compute_compound_score
 
-            df = compute_compound_score(project_config(city), week_start=week_start(week))
+            df = compute_compound_score(
+                project_config(city), week_start=week_start(week)
+            )
             return df["burden_class"].value_counts().to_dict()
 
         @task
@@ -102,6 +106,7 @@ def build_spatial_dag(city: str):
         week = resolve_week()
         inputs = [run_kriging(week), process_lst(week), healthcare_access(week)]
         score = compound_score(week)
+
         @task.short_circuit
         def notify_requested() -> bool:
             return bool(get_current_context()["params"].get("notify", True))
@@ -109,7 +114,9 @@ def build_spatial_dag(city: str):
         start_alerts = TriggerDagRunOperator(
             task_id="trigger_alert_dispatch",
             trigger_dag_id=f"alert_dispatch_{city}",
-            conf={"week_start": week},  # briefings stay off: those runs are started by hand
+            conf={
+                "week_start": week
+            },  # briefings stay off: those runs are started by hand
         )
         inputs >> score >> hotspots(week) >> notify_requested() >> start_alerts
 
