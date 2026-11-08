@@ -21,9 +21,9 @@ Usage:
 """
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
-import re
 
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
@@ -47,6 +47,7 @@ REFERENCE_MIN_DENSITY = 0.04  # citations per word
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
+
 
 def ingest_documents(config: dict[str, Any]) -> list[dict[str, Any]]:
     """
@@ -87,16 +88,18 @@ def ingest_documents(config: dict[str, Any]) -> list[dict[str, Any]]:
                 if len(text) < rag_cfg["min_chunk_chars"]:
                     continue
 
-                chunks.append({
-                    "id": _make_chunk_id(city_fips, pdf_path.name, page_num, i),
-                    "text": text,
-                    "metadata": {
-                        "source": pdf_path.name,
-                        "page": page_num,
-                        "chunk_index": i,
-                        "city_fips": city_fips,
-                    },
-                })
+                chunks.append(
+                    {
+                        "id": _make_chunk_id(city_fips, pdf_path.name, page_num, i),
+                        "text": text,
+                        "metadata": {
+                            "source": pdf_path.name,
+                            "page": page_num,
+                            "chunk_index": i,
+                            "city_fips": city_fips,
+                        },
+                    }
+                )
 
     if not chunks:
         logger.warning("PDFs were found but produced no usable text.")
@@ -110,13 +113,10 @@ def ingest_documents(config: dict[str, Any]) -> list[dict[str, Any]]:
         model_name=rag_cfg["embedding_model"],
     )
 
-    for chunk, embedding in zip(chunks, embeddings):
+    for chunk, embedding in zip(chunks, embeddings, strict=False):
         chunk["embedding"] = embedding
 
-    logger.info(
-        f"Embedded {len(chunks)} chunks "
-        f"({len(embeddings[0])} dimensions each)"
-    )
+    logger.info(f"Embedded {len(chunks)} chunks ({len(embeddings[0])} dimensions each)")
 
     return chunks
 
@@ -124,6 +124,7 @@ def ingest_documents(config: dict[str, Any]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _extract_pages(pdf_path: Path) -> list[tuple[int, str]]:
     """
@@ -172,8 +173,10 @@ def _is_reference_page(text: str) -> bool:
     """True for bibliography pages: many citations relative to the word count."""
     n_citations = len(_CITATION.findall(text))
     n_words = max(len(text.split()), 1)
-    return (n_citations >= REFERENCE_MIN_CITATIONS
-            and n_citations / n_words >= REFERENCE_MIN_DENSITY)
+    return (
+        n_citations >= REFERENCE_MIN_CITATIONS
+        and n_citations / n_words >= REFERENCE_MIN_DENSITY
+    )
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:

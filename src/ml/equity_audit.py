@@ -47,8 +47,6 @@ import mlflow
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
-    average_precision_score,
-    precision_score,
     recall_score,
     roc_auc_score,
 )
@@ -66,6 +64,7 @@ MIN_SUBGROUP_SIZE = 50
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
+
 
 def run_equity_audit(
     config: dict[str, Any],
@@ -163,6 +162,7 @@ def run_equity_audit(
 # Private functions
 # ---------------------------------------------------------------------------
 
+
 def _load_race_data(config: dict[str, Any]) -> pd.DataFrame:
     """
     Load majority race/ethnicity per tract from ACS B03002.
@@ -201,8 +201,7 @@ def _load_race_data(config: dict[str, Any]) -> pd.DataFrame:
 
     if df.empty:
         logger.warning(
-            "No race/ethnicity data found. "
-            "equity audit will skip race stratification."
+            "No race/ethnicity data found. equity audit will skip race stratification."
         )
         return pd.DataFrame(columns=["geoid", "majority_race"])
 
@@ -233,11 +232,13 @@ def _load_race_data(config: dict[str, Any]) -> pd.DataFrame:
     df["majority_race"] = df.apply(get_majority, axis=1)
 
     logger.info(
-        f"Race distribution: "
-        + ", ".join([
-            f"{race}={count}"
-            for race, count in df["majority_race"].value_counts().items()
-        ])
+        "Race distribution: "
+        + ", ".join(
+            [
+                f"{race}={count}"
+                for race, count in df["majority_race"].value_counts().items()
+            ]
+        )
     )
 
     return df[["geoid", "majority_race"]]
@@ -358,12 +359,8 @@ def _compute_subgroup_metrics(
         # Flag the top 10% highest predicted risk tracts
         # What fraction of those are truly high risk?
         n_top_decile = max(1, int(n_tracts * 0.10))
-        top_decile_mask = (
-            subgroup["y_pred_prob"].rank(ascending=False) <= n_top_decile
-        )
-        precision_top_10 = subgroup.loc[
-            top_decile_mask, "y_true"
-        ].mean()
+        top_decile_mask = subgroup["y_pred_prob"].rank(ascending=False) <= n_top_decile
+        precision_top_10 = subgroup.loc[top_decile_mask, "y_true"].mean()
 
         # Recall — fraction of true positives caught
         if n_high_risk > 0:
@@ -376,22 +373,28 @@ def _compute_subgroup_metrics(
             recall = float("nan")
 
         # Mean Kriging variance — data quality in this subgroup
-        avg_kriging_var = subgroup["pm25_kriged_variance"].mean() \
-            if "pm25_kriged_variance" in subgroup.columns else float("nan")
+        avg_kriging_var = (
+            subgroup["pm25_kriged_variance"].mean()
+            if "pm25_kriged_variance" in subgroup.columns
+            else float("nan")
+        )
 
-        records.append({
-            "stratification_dim": group_label,
-            "subgroup": str(group_value),
-            "n_tracts": n_tracts,
-            "n_high_risk": int(n_high_risk),
-            "high_risk_rate": round(n_high_risk / n_tracts, 4),
-            "auc": round(auc, 4) if not np.isnan(auc) else None,
-            "precision_top_decile": round(precision_top_10, 4),
-            "recall": round(recall, 4) if not np.isnan(recall) else None,
-            "avg_kriging_variance": round(avg_kriging_var, 6)
-                if not np.isnan(avg_kriging_var) else None,
-            "metrics_reliable": reliable,
-        })
+        records.append(
+            {
+                "stratification_dim": group_label,
+                "subgroup": str(group_value),
+                "n_tracts": n_tracts,
+                "n_high_risk": int(n_high_risk),
+                "high_risk_rate": round(n_high_risk / n_tracts, 4),
+                "auc": round(auc, 4) if not np.isnan(auc) else None,
+                "precision_top_decile": round(precision_top_10, 4),
+                "recall": round(recall, 4) if not np.isnan(recall) else None,
+                "avg_kriging_variance": round(avg_kriging_var, 6)
+                if not np.isnan(avg_kriging_var)
+                else None,
+                "metrics_reliable": reliable,
+            }
+        )
 
         logger.info(
             f"  {group_label}={group_value}: "
@@ -488,26 +491,22 @@ def _log_to_mlflow(
         mlflow.set_tag("city_fips", config["full_fips"])
 
         # Log AUC range across income quartiles
-        income_df = results_df[
-            results_df["stratification_dim"] == "income_quartile"
-        ]
+        income_df = results_df[results_df["stratification_dim"] == "income_quartile"]
         if not income_df.empty and income_df["auc"].notna().any():
             auc_range = income_df["auc"].max() - income_df["auc"].min()
             mlflow.log_metric("income_auc_range", round(float(auc_range), 4))
-            mlflow.log_metric("n_disparities_income", int(
-                income_df["disparity_flag"].sum()
-            ))
+            mlflow.log_metric(
+                "n_disparities_income", int(income_df["disparity_flag"].sum())
+            )
 
         # Log AUC range across race groups
-        race_df = results_df[
-            results_df["stratification_dim"] == "majority_race"
-        ]
+        race_df = results_df[results_df["stratification_dim"] == "majority_race"]
         if not race_df.empty and race_df["auc"].notna().any():
             auc_range = race_df["auc"].max() - race_df["auc"].min()
             mlflow.log_metric("race_auc_range", round(float(auc_range), 4))
-            mlflow.log_metric("n_disparities_race", int(
-                race_df["disparity_flag"].sum()
-            ))
+            mlflow.log_metric(
+                "n_disparities_race", int(race_df["disparity_flag"].sum())
+            )
 
         mlflow.log_metric(
             "total_disparities_flagged",
@@ -527,8 +526,11 @@ def _log_summary(results_df: pd.DataFrame) -> None:
 
         for _, row in dim_df.iterrows():
             flag = " ← DISPARITY FLAGGED" if row["disparity_flag"] else ""
-            cause = f" ({row['disparity_likely_cause']})" \
-                if row["disparity_likely_cause"] else ""
+            cause = (
+                f" ({row['disparity_likely_cause']})"
+                if row["disparity_likely_cause"]
+                else ""
+            )
             auc_str = f"{row['auc']:.3f}" if pd.notna(row["auc"]) else "N/A"
             logger.info(
                 f"  {row['subgroup']:20s} | "

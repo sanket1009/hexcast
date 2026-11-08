@@ -1,0 +1,7 @@
+# Build context is the repository root, but the image only needs
+# docker/requirements-airflow.txt. Everything else is mounted at runtime.
+*
+!docker/requirements-airflow.txt
+!docker/requirements-api.txt
+!src/
+!config/

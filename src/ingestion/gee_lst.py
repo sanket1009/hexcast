@@ -96,6 +96,7 @@ KELVIN_TO_CELSIUS = -273.15
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def pull_lst_raster(
     config: dict[str, Any],
     week_start: datetime | None = None,
@@ -148,11 +149,10 @@ def pull_lst_raster(
     # Keeping it local prevents auth errors on modules that don't need GEE
     try:
         import ee
-    except ImportError:
+    except ImportError as err:
         raise ImportError(
-            "earthengine-api is not installed. "
-            "Run: pip install earthengine-api"
-        )
+            "earthengine-api is not installed. Run: pip install earthengine-api"
+        ) from err
 
     # Determine week
     if week_start is None:
@@ -166,10 +166,7 @@ def pull_lst_raster(
     gcs_filename = f"{full_fips}_{week_str}.tif"
     gcs_path = f"rasters/lst/{gcs_filename}"
 
-    logger.info(
-        f"Pulling LST raster for {config['city_name']} "
-        f"week of {week_str}"
-    )
+    logger.info(f"Pulling LST raster for {config['city_name']} week of {week_str}")
 
     # Check if this week's raster already exists in GCS
     # Idempotency: skip GEE export if raster already exists
@@ -191,9 +188,13 @@ def pull_lst_raster(
 
     # Step 3 — Deliver the raster to the object store
     if config.get("storage", {}).get("backend", "gcp") == "local":
-        gcs_uri = _download_tiled(image=lst_image, gcs_path=gcs_path, config=config, ee=ee)
+        gcs_uri = _download_tiled(
+            image=lst_image, gcs_path=gcs_path, config=config, ee=ee
+        )
     else:
-        gcs_uri = _export_to_gcs(image=lst_image, gcs_path=gcs_path, config=config, ee=ee)
+        gcs_uri = _export_to_gcs(
+            image=lst_image, gcs_path=gcs_path, config=config, ee=ee
+        )
 
     logger.info(f"LST raster export complete: {gcs_uri}")
 
@@ -203,6 +204,7 @@ def pull_lst_raster(
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _get_most_recent_monday() -> datetime:
     """Return the most recent Monday at midnight."""
@@ -259,7 +261,9 @@ def _authenticate_gee(config: dict[str, Any]) -> None:
             logger.debug("GEE service account authentication successful")
             return
         except Exception as e:
-            logger.warning(f"GEE service account auth failed: {e}. Trying default auth.")
+            logger.warning(
+                f"GEE service account auth failed: {e}. Trying default auth."
+            )
 
     # Development: use credentials from `earthengine authenticate`
     # These are cached in ~/.config/earthengine/credentials
@@ -271,7 +275,7 @@ def _authenticate_gee(config: dict[str, Any]) -> None:
         raise RuntimeError(
             f"GEE authentication failed: {e}\n"
             f"Run 'earthengine authenticate' in terminal to set up credentials."
-        )
+        ) from e
 
 
 def _build_lst_composite(
@@ -315,9 +319,14 @@ def _build_lst_composite(
     cloud_max = gee_cfg["cloud_cover_max"]
     window_days = gee_cfg["composite_window_days"]
 
-    city_bounds = ee.Geometry.Rectangle([
-        bbox["west"], bbox["south"], bbox["east"], bbox["north"],
-    ])
+    city_bounds = ee.Geometry.Rectangle(
+        [
+            bbox["west"],
+            bbox["south"],
+            bbox["east"],
+            bbox["north"],
+        ]
+    )
 
     # Trailing window ending on the last day of the week.
     # filterDate's end is exclusive, so stop at the day after week_end.
@@ -329,10 +338,14 @@ def _build_lst_composite(
         c = (
             ee.ImageCollection(coll_id)
             .filterBounds(city_bounds)
-            .filterDate(window_start.strftime("%Y-%m-%d"), window_end.strftime("%Y-%m-%d"))
+            .filterDate(
+                window_start.strftime("%Y-%m-%d"), window_end.strftime("%Y-%m-%d")
+            )
             .filter(ee.Filter.lte("CLOUD_COVER", cloud_max))
         )
-        logger.info(f"{coll_id}: {c.size().getInfo()} scenes with cloud cover <= {cloud_max}%")
+        logger.info(
+            f"{coll_id}: {c.size().getInfo()} scenes with cloud cover <= {cloud_max}%"
+        )
         collection = c if collection is None else collection.merge(c)
 
     scene_count = collection.size().getInfo()
@@ -384,9 +397,14 @@ def _build_lst_composite(
     # survived into the median for offshore tracts (June 22, 2026 run)
     composite = composite.updateMask(land_mask)
 
-    stats = composite.mask().updateMask(land_mask).reduceRegion(
-        reducer=ee.Reducer.mean(), geometry=city_bounds, scale=300, maxPixels=1e9
-    ).getInfo()
+    stats = (
+        composite.mask()
+        .updateMask(land_mask)
+        .reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=city_bounds, scale=300, maxPixels=1e9
+        )
+        .getInfo()
+    )
     coverage = float(stats.get("lst_celsius") or 0.0)
     logger.info(f"Clear-pixel coverage of land in the bbox: {coverage:.1%}")
     if coverage < gee_cfg["min_coverage"]:
@@ -444,10 +462,10 @@ def _export_to_gcs(
         description=f"CHBIndex LST {gcs_path}",
         bucket=bucket,
         fileNamePrefix=gcs_path.replace(".tif", ""),
-        scale=scale,           # 30m per pixel — native Landsat resolution
-        crs="EPSG:4326",       # WGS84 — matches our pipeline CRS
+        scale=scale,  # 30m per pixel — native Landsat resolution
+        crs="EPSG:4326",  # WGS84 — matches our pipeline CRS
         fileFormat="GeoTIFF",
-        maxPixels=1e9,         # allow large exports — LA County is big
+        maxPixels=1e9,  # allow large exports — LA County is big
     )
 
     task.start()
@@ -473,15 +491,10 @@ def _export_to_gcs(
 
         elif state == "FAILED":
             error_msg = status.get("error_message", "Unknown error")
-            raise RuntimeError(
-                f"GEE export task failed: {error_msg}\n"
-                f"Task: {gcs_path}"
-            )
+            raise RuntimeError(f"GEE export task failed: {error_msg}\nTask: {gcs_path}")
 
         elif state in ("CANCELLED", "CANCEL_REQUESTED"):
-            raise RuntimeError(
-                f"GEE export task was cancelled: {gcs_path}"
-            )
+            raise RuntimeError(f"GEE export task was cancelled: {gcs_path}")
 
         # States: READY, RUNNING — still in progress, keep polling
         if poll_num % 5 == 0 and poll_num > 0:
@@ -505,7 +518,6 @@ def _download_tiled(image, gcs_path: str, config: dict[str, Any], ee) -> str:
     with rasterio. Masked pixels arrive as DOWNLOAD_NODATA and are
     written as NaN, which lst_processing.py treats as missing.
     """
-    import io
     import numpy as np
     import rasterio
     import requests
@@ -527,7 +539,9 @@ def _download_tiled(image, gcs_path: str, config: dict[str, Any], ee) -> str:
                 content = _get_tile_with_retry(image, region, scale, ee, requests)
                 mem = rasterio.MemoryFile(content)
                 datasets.append((mem, mem.open()))
-                logger.info(f"Downloaded LST tile {i * n + j + 1}/{n * n} ({len(content) / 1e6:.1f} MB)")
+                logger.info(
+                    f"Downloaded LST tile {i * n + j + 1}/{n * n} ({len(content) / 1e6:.1f} MB)"
+                )
 
         mosaic, transform = merge([ds for _, ds in datasets], nodata=DOWNLOAD_NODATA)
         profile = datasets[0][1].profile
@@ -542,8 +556,14 @@ def _download_tiled(image, gcs_path: str, config: dict[str, Any], ee) -> str:
     local_path = Path("data") / "raw" / "lst_rasters" / Path(gcs_path).name
     local_path.parent.mkdir(parents=True, exist_ok=True)
     profile.update(
-        driver="GTiff", height=band.shape[0], width=band.shape[1], count=1,
-        dtype="float32", nodata=float("nan"), transform=transform, compress="deflate",
+        driver="GTiff",
+        height=band.shape[0],
+        width=band.shape[1],
+        count=1,
+        dtype="float32",
+        nodata=float("nan"),
+        transform=transform,
+        compress="deflate",
     )
     with rasterio.open(local_path, "w", **profile) as dst:
         dst.write(band, 1)
@@ -556,7 +576,9 @@ def _download_tiled(image, gcs_path: str, config: dict[str, Any], ee) -> str:
     return upload_file(local_path, config, gcs_path=gcs_path)
 
 
-def _get_tile_with_retry(image, region, scale: int, ee, requests, max_attempts: int = 5) -> bytes:
+def _get_tile_with_retry(
+    image, region, scale: int, ee, requests, max_attempts: int = 5
+) -> bytes:
     """
     Download one tile, retrying on Earth Engine's transient errors.
 
@@ -568,12 +590,14 @@ def _get_tile_with_retry(image, region, scale: int, ee, requests, max_attempts: 
     retryable = {429, 500, 502, 503, 504}
     for attempt in range(1, max_attempts + 1):
         # A fresh URL each attempt: the server-side computation is re-queued
-        url = image.getDownloadURL({
-            "region": region,
-            "scale": scale,
-            "crs": "EPSG:4326",
-            "format": "GEO_TIFF",
-        })
+        url = image.getDownloadURL(
+            {
+                "region": region,
+                "scale": scale,
+                "crs": "EPSG:4326",
+                "format": "GEO_TIFF",
+            }
+        )
         try:
             resp = requests.get(url, timeout=300)
             if resp.status_code not in retryable:
@@ -584,7 +608,11 @@ def _get_tile_with_retry(image, region, scale: int, ee, requests, max_attempts: 
             reason = f"connection error: {e}"
 
         if attempt == max_attempts:
-            raise RuntimeError(f"LST tile download failed after {max_attempts} attempts ({reason})")
+            raise RuntimeError(
+                f"LST tile download failed after {max_attempts} attempts ({reason})"
+            )
         wait = 5 * 2 ** (attempt - 1)
-        logger.warning(f"Tile download {reason}; retry {attempt}/{max_attempts - 1} in {wait}s")
+        logger.warning(
+            f"Tile download {reason}; retry {attempt}/{max_attempts - 1} in {wait}s"
+        )
         time.sleep(wait)

@@ -39,7 +39,6 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import cross_val_score
-from sklearn.metrics import roc_auc_score
 
 from src.ml.spatial_cv import SpatialBlockCV, build_spatial_groups, summarize_cv_folds
 from src.utils.bigquery import read_query, write_dataframe
@@ -50,19 +49,32 @@ logger = get_logger(__name__)
 # Feature columns for each model
 # Model A: temporal + socioeconomic only
 MODEL_A_FEATURES = [
-    "score_current", "lag_1w", "lag_2w", "lag_4w",
-    "rolling_mean_4w", "rolling_std_4w",
-    "delta_1w", "delta_4w", "weeks_high_risk_4w",
-    "is_summer", "week_of_year",
-    "vulnerability_index", "median_income_norm",
-    "asthma_pct", "copd_pct", "heart_disease_pct",
+    "score_current",
+    "lag_1w",
+    "lag_2w",
+    "lag_4w",
+    "rolling_mean_4w",
+    "rolling_std_4w",
+    "delta_1w",
+    "delta_4w",
+    "weeks_high_risk_4w",
+    "is_summer",
+    "week_of_year",
+    "vulnerability_index",
+    "median_income_norm",
+    "asthma_pct",
+    "copd_pct",
+    "heart_disease_pct",
     "population",
 ]
 
 # Model B: Model A + H3 spatial lags
 MODEL_B_FEATURES = MODEL_A_FEATURES + [
-    "h3_lag_ring1", "h3_lag_ring2", "h3_lag_diff",
-    "h3_max_neighbor", "h3_high_risk_neighbors",
+    "h3_lag_ring1",
+    "h3_lag_ring2",
+    "h3_lag_diff",
+    "h3_max_neighbor",
+    "h3_high_risk_neighbors",
 ]
 
 # Target variable
@@ -72,6 +84,7 @@ TARGET = "is_high_risk_next_week"
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
+
 
 def train_all_models(
     config: dict[str, Any],
@@ -98,17 +111,13 @@ def train_all_models(
     if week_start is None:
         today = datetime.now()
         week_start = today - timedelta(days=today.weekday())
-        week_start = week_start.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     week_str = week_start.strftime("%Y-%m-%d")
     city = config["city_name"]
     random_seed = config["ml"]["random_seed"]
 
-    logger.info(
-        f"Training all models for {city} week of {week_str}"
-    )
+    logger.info(f"Training all models for {city} week of {week_str}")
 
     # Step 1 — Set up MLflow
     _setup_mlflow(config)
@@ -117,8 +126,7 @@ def train_all_models(
     df_a = _load_features(config, "ml_features_model_a", week_str)
     df_b = _load_features(config, "ml_features_model_b", week_str)
     logger.info(
-        f"Loaded features: Model A={len(df_a):,} rows, "
-        f"Model B={len(df_b):,} rows"
+        f"Loaded features: Model A={len(df_a):,} rows, Model B={len(df_b):,} rows"
     )
 
     # Step 3 — Build spatial CV groups
@@ -209,8 +217,11 @@ def train_all_models(
 
     # Step 9 — Write CV scores to BigQuery
     _write_cv_scores(
-        scores_a, scores_b, scores_c,
-        week_str, config,
+        scores_a,
+        scores_b,
+        scores_c,
+        week_str,
+        config,
     )
 
     return {
@@ -230,6 +241,7 @@ def train_all_models(
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _setup_mlflow(config: dict[str, Any]) -> None:
     """
@@ -254,8 +266,7 @@ def _setup_mlflow(config: dict[str, Any]) -> None:
     mlflow.set_experiment(experiment_name)
 
     logger.debug(
-        f"MLflow configured: tracking_uri={tracking_uri}, "
-        f"experiment={experiment_name}"
+        f"MLflow configured: tracking_uri={tracking_uri}, experiment={experiment_name}"
     )
 
 
@@ -276,10 +287,7 @@ def _load_features(
     )
 
     if df.empty:
-        raise ValueError(
-            f"No features found in {table_name}. "
-            f"Run features.py first."
-        )
+        raise ValueError(f"No features found in {table_name}. Run features.py first.")
 
     # Drop rows where target is null
     # These are weeks where next-week data doesn't exist yet
@@ -340,10 +348,7 @@ def _prepare_features(
     X = X_df.values
     y = df[target_col].values.astype(int)
 
-    logger.debug(
-        f"Feature matrix: {X.shape}, "
-        f"positive rate: {y.mean():.2%}"
-    )
+    logger.debug(f"Feature matrix: {X.shape}, positive rate: {y.mean():.2%}")
 
     return X, y
 
@@ -405,21 +410,25 @@ def _train_xgboost(
         mlflow.set_tags(experiment_tags)
 
         # Log hyperparameters
-        mlflow.log_params({
-            "n_estimators": xgb_params["n_estimators"],
-            "learning_rate": xgb_params["learning_rate"],
-            "max_depth": xgb_params["max_depth"],
-            "subsample": xgb_params["subsample"],
-            "n_features": X.shape[1],
-            "n_samples": X.shape[0],
-            "cv_folds": config["ml"]["cv_folds"],
-            "h3_resolution": config["spatial"]["h3_resolution"],
-        })
+        mlflow.log_params(
+            {
+                "n_estimators": xgb_params["n_estimators"],
+                "learning_rate": xgb_params["learning_rate"],
+                "max_depth": xgb_params["max_depth"],
+                "subsample": xgb_params["subsample"],
+                "n_features": X.shape[1],
+                "n_samples": X.shape[0],
+                "cv_folds": config["ml"]["cv_folds"],
+                "h3_resolution": config["spatial"]["h3_resolution"],
+            }
+        )
 
         # Run spatial cross-validation
         # scoring="roc_auc" uses AUC as the evaluation metric
         cv_scores = cross_val_score(
-            model, X, y,
+            model,
+            X,
+            y,
             cv=cv,
             groups=groups,
             scoring="roc_auc",
@@ -432,7 +441,7 @@ def _train_xgboost(
         mlflow.log_metric("cv_auc_max", float(np.max(cv_scores)))
 
         for i, score in enumerate(cv_scores):
-            mlflow.log_metric(f"cv_auc_fold_{i+1}", float(score))
+            mlflow.log_metric(f"cv_auc_fold_{i + 1}", float(score))
 
         # Fit final model on ALL data
         # CV gives us the performance estimate
@@ -443,19 +452,17 @@ def _train_xgboost(
         mlflow.xgboost.log_model(model, model_name)
 
         # Compute and log feature importance
-        importance_df = pd.DataFrame({
-            "feature": feature_names[:X.shape[1]],
-            "importance": model.feature_importances_,
-        }).sort_values("importance", ascending=False)
+        importance_df = pd.DataFrame(
+            {
+                "feature": feature_names[: X.shape[1]],
+                "importance": model.feature_importances_,
+            }
+        ).sort_values("importance", ascending=False)
 
         logger.info(
-            f"{model_name} CV AUC: {np.mean(cv_scores):.4f} "
-            f"± {np.std(cv_scores):.4f}"
+            f"{model_name} CV AUC: {np.mean(cv_scores):.4f} ± {np.std(cv_scores):.4f}"
         )
-        logger.info(
-            f"Top 5 features:\n"
-            f"{importance_df.head(5).to_string(index=False)}"
-        )
+        logger.info(f"Top 5 features:\n{importance_df.head(5).to_string(index=False)}")
 
     return model, cv_scores, importance_df
 
@@ -505,9 +512,7 @@ def _train_lightgbm(
     # 0 = no constraint (default for most features)
     # +1 = higher feature value must increase predicted risk
     # -1 = higher feature value must decrease predicted risk
-    monotone_constraints = _build_monotone_constraints(
-        feature_names[:X.shape[1]]
-    )
+    monotone_constraints = _build_monotone_constraints(feature_names[: X.shape[1]])
 
     model = lgb.LGBMClassifier(
         n_estimators=lgb_params["n_estimators"],
@@ -524,20 +529,24 @@ def _train_lightgbm(
     with mlflow.start_run(run_name=model_name):
         mlflow.set_tags(experiment_tags)
 
-        mlflow.log_params({
-            "n_estimators": lgb_params["n_estimators"],
-            "learning_rate": lgb_params["learning_rate"],
-            "num_leaves": lgb_params["num_leaves"],
-            "n_features": X.shape[1],
-            "n_monotone_constraints": sum(
-                1 for c in monotone_constraints if c != 0
-            ),
-        })
+        mlflow.log_params(
+            {
+                "n_estimators": lgb_params["n_estimators"],
+                "learning_rate": lgb_params["learning_rate"],
+                "num_leaves": lgb_params["num_leaves"],
+                "n_features": X.shape[1],
+                "n_monotone_constraints": sum(
+                    1 for c in monotone_constraints if c != 0
+                ),
+            }
+        )
 
         # Log which features have constraints
         constrained_features = [
             f"{name}:{c}"
-            for name, c in zip(feature_names[:X.shape[1]], monotone_constraints)
+            for name, c in zip(
+                feature_names[: X.shape[1]], monotone_constraints, strict=False
+            )
             if c != 0
         ]
         mlflow.log_param(
@@ -546,7 +555,9 @@ def _train_lightgbm(
         )
 
         cv_scores = cross_val_score(
-            model, X, y,
+            model,
+            X,
+            y,
             cv=cv,
             groups=groups,
             scoring="roc_auc",
@@ -556,19 +567,20 @@ def _train_lightgbm(
         mlflow.log_metric("cv_auc_std", float(np.std(cv_scores)))
 
         for i, score in enumerate(cv_scores):
-            mlflow.log_metric(f"cv_auc_fold_{i+1}", float(score))
+            mlflow.log_metric(f"cv_auc_fold_{i + 1}", float(score))
 
         model.fit(X, y)
         mlflow.sklearn.log_model(model, model_name)
 
-        importance_df = pd.DataFrame({
-            "feature": feature_names[:X.shape[1]],
-            "importance": model.feature_importances_,
-        }).sort_values("importance", ascending=False)
+        importance_df = pd.DataFrame(
+            {
+                "feature": feature_names[: X.shape[1]],
+                "importance": model.feature_importances_,
+            }
+        ).sort_values("importance", ascending=False)
 
         logger.info(
-            f"{model_name} CV AUC: {np.mean(cv_scores):.4f} "
-            f"± {np.std(cv_scores):.4f}"
+            f"{model_name} CV AUC: {np.mean(cv_scores):.4f} ± {np.std(cv_scores):.4f}"
         )
 
     return model, cv_scores, importance_df
@@ -602,15 +614,25 @@ def _build_monotone_constraints(
     # Pattern matching handles feature names robustly
     positive_features = [
         # Higher = more risk (+1)
-        "pm25", "lst", "lag_", "score_current",
-        "rolling_mean", "delta_", "weeks_high_risk",
-        "h3_lag", "h3_max", "h3_high_risk",
-        "asthma", "copd", "heart_disease",
+        "pm25",
+        "lst",
+        "lag_",
+        "score_current",
+        "rolling_mean",
+        "delta_",
+        "weeks_high_risk",
+        "h3_lag",
+        "h3_max",
+        "h3_high_risk",
+        "asthma",
+        "copd",
+        "heart_disease",
         "vulnerability",
     ]
     negative_features = [
         # Higher = less risk (-1)
-        "access_score", "median_income_norm",
+        "access_score",
+        "median_income_norm",
     ]
 
     constraints = []
@@ -642,16 +664,20 @@ def _write_cv_scores(
 ) -> None:
     """Write CV scores for all three models to BigQuery."""
     records = []
-    for fold, (sa, sb, sc) in enumerate(zip(scores_a, scores_b, scores_c)):
-        records.append({
-            "fold": fold + 1,
-            "model_a_auc": round(float(sa), 6),
-            "model_b_auc": round(float(sb), 6),
-            "model_c_auc": round(float(sc), 6),
-            "week_str": week_str,
-            "city_fips": config["full_fips"],
-        })
+    for fold, (sa, sb, sc) in enumerate(
+        zip(scores_a, scores_b, scores_c, strict=False)
+    ):
+        records.append(
+            {
+                "fold": fold + 1,
+                "model_a_auc": round(float(sa), 6),
+                "model_b_auc": round(float(sb), 6),
+                "model_c_auc": round(float(sc), 6),
+                "week_str": week_str,
+                "city_fips": config["full_fips"],
+            }
+        )
 
     df = pd.DataFrame(records)
     write_dataframe(df, "model_cv_scores", config)
-    logger.info(f"CV scores written to BigQuery")
+    logger.info("CV scores written to BigQuery")

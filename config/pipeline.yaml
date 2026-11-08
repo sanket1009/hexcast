@@ -11,6 +11,9 @@ airflow:
   max_retries: 3
   retry_delay_minutes: 5
   task_timeout_minutes: 60
+  # Weeks between a run date and the week it processes. EPA AQS data
+  # arrives months late; a run on Nov 9, 2026 processes the week of June 22.
+  ingest_lag_weeks: 20
   email_on_failure: false
   email_on_retry: false
 

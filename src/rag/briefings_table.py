@@ -21,8 +21,9 @@ Write path:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -67,7 +68,7 @@ REQUIRED_COLUMNS = [
 
 
 def build_briefings_frame(
-    briefings: Iterable["Briefing"],
+    briefings: Iterable[Briefing],
     week_start: date,
     config: dict[str, Any],
 ) -> pd.DataFrame:
@@ -88,7 +89,7 @@ def write_briefings(df: pd.DataFrame, config: dict[str, Any]) -> None:
 
 
 def save_briefings(
-    briefings: Iterable["Briefing"],
+    briefings: Iterable[Briefing],
     week_start: date,
     config: dict[str, Any],
 ) -> pd.DataFrame:
@@ -105,7 +106,10 @@ def save_briefings(
 # Private functions
 # ---------------------------------------------------------------------------
 
-def _briefing_row(b: "Briefing", week_start: date, config: dict[str, Any]) -> dict[str, Any]:
+
+def _briefing_row(
+    b: Briefing, week_start: date, config: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "geoid": b.geoid,
         "week_start_date": week_start,
@@ -141,7 +145,9 @@ def _validate(df: pd.DataFrame, config: dict[str, Any]) -> None:
     nulls = df[REQUIRED_COLUMNS].isna().sum()
     nulls = nulls[nulls > 0]
     if not nulls.empty:
-        raise ValueError(f"Briefings frame has nulls in required columns: {nulls.to_dict()}")
+        raise ValueError(
+            f"Briefings frame has nulls in required columns: {nulls.to_dict()}"
+        )
 
     if (df["summary"].str.strip() == "").any():
         raise ValueError("Briefings frame has empty summaries")

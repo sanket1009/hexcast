@@ -185,4 +185,22 @@ gcp:
   gcs_raster_prefix: "rasters/lst/"   # folder path inside the bucket
   location: "US"                       # BigQuery dataset region
 
+# Areas the weekly report names instead of tract IDs (src/ingestion/reporting_areas.py).
+# Each tract is assigned to the area it overlaps most. LA County eGIS layers.
+reporting_areas:
+  region:        # Service Planning Areas (2022), the level LA County DPH plans at
+    url: "https://public.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/Administrative_Boundaries/MapServer/23"
+    name_field: "SPA_NAME"
+    id_field: "SPA"
+  district:      # Health Districts (2022), nested in SPAs
+    url: "https://public.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/Administrative_Boundaries/MapServer/22"
+    name_field: "HD_NAME"
+  community:     # Countywide Statistical Areas: named cities and communities
+    url: "https://dpw.gis.lacounty.gov/dpw/rest/services/GIS_Web_Services/MapServer/4"
+    name_field: "LABEL"
+
+# Weekly critical-tract email (alert_dispatch DAG). Recipients: ALERT_EMAIL_TO in .env
+alerts:
+  top_n: 5    # communities shown per change type (newly critical, rose, left); all in the CSV
+
 policy_docs_dir: "data/policy_docs/los_angeles"

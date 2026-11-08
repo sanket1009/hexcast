@@ -57,6 +57,7 @@ logger = get_logger(__name__)
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def calibrate_model(
     config: dict[str, Any],
     champion_model,
@@ -181,6 +182,7 @@ def calibrate_model(
 # Private functions
 # ---------------------------------------------------------------------------
 
+
 def _compute_reliability_diagram(
     y_true: np.ndarray,
     y_prob_raw: np.ndarray,
@@ -227,13 +229,15 @@ def _compute_reliability_diagram(
     # calibration_curve returns (fraction_of_positives, mean_predicted_value)
     # for each bin
     frac_pos_raw, mean_pred_raw = calibration_curve(
-        y_true, y_prob_raw,
+        y_true,
+        y_prob_raw,
         n_bins=n_bins,
         strategy="uniform",
     )
 
     frac_pos_cal, mean_pred_cal = calibration_curve(
-        y_true, y_prob_calibrated,
+        y_true,
+        y_prob_calibrated,
         n_bins=n_bins,
         strategy="uniform",
     )
@@ -242,14 +246,16 @@ def _compute_reliability_diagram(
     # since both curves share the same bins
     min_len = min(len(mean_pred_raw), len(mean_pred_cal))
 
-    df = pd.DataFrame({
-        "bin_mean_predicted_raw": mean_pred_raw[:min_len].round(4),
-        "bin_mean_predicted_cal": mean_pred_cal[:min_len].round(4),
-        "fraction_positive_raw": frac_pos_raw[:min_len].round(4),
-        "fraction_positive_calibrated": frac_pos_cal[:min_len].round(4),
-        "week_str": week_str,
-        "city_fips": city_fips,
-    })
+    df = pd.DataFrame(
+        {
+            "bin_mean_predicted_raw": mean_pred_raw[:min_len].round(4),
+            "bin_mean_predicted_cal": mean_pred_cal[:min_len].round(4),
+            "fraction_positive_raw": frac_pos_raw[:min_len].round(4),
+            "fraction_positive_calibrated": frac_pos_cal[:min_len].round(4),
+            "week_str": week_str,
+            "city_fips": city_fips,
+        }
+    )
 
     # Log calibration quality — how close to diagonal?
     # Mean absolute calibration error (MACE) — lower is better

@@ -53,14 +53,14 @@ CDC_PLACES_URL = "https://data.cdc.gov/resource/cwsq-ngmh.json"
 # These are the ones most relevant to climate-health compound burden
 # Full list: https://www.cdc.gov/places/measure-definitions/
 HEALTH_MEASURES = {
-    "CASTHMA": "asthma_pct",        # current asthma prevalence
-    "CHD": "heart_disease_pct",     # coronary heart disease
-    "COPD": "copd_pct",             # chronic obstructive pulmonary disease
-    "DIABETES": "diabetes_pct",     # diagnosed diabetes
-    "OBESITY": "obesity_pct",       # obesity
-    "BPHIGH": "high_bp_pct",        # high blood pressure
-    "HIGHCHOL": "high_chol_pct",    # high cholesterol
-    "STROKE": "stroke_pct",         # stroke
+    "CASTHMA": "asthma_pct",  # current asthma prevalence
+    "CHD": "heart_disease_pct",  # coronary heart disease
+    "COPD": "copd_pct",  # chronic obstructive pulmonary disease
+    "DIABETES": "diabetes_pct",  # diagnosed diabetes
+    "OBESITY": "obesity_pct",  # obesity
+    "BPHIGH": "high_bp_pct",  # high blood pressure
+    "HIGHCHOL": "high_chol_pct",  # high cholesterol
+    "STROKE": "stroke_pct",  # stroke
 }
 
 # Socrata page size — max records per API call
@@ -72,6 +72,7 @@ PAGE_SIZE = 10000
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
+
 
 def pull_health_outcomes(config: dict[str, Any]) -> pd.DataFrame:
     """
@@ -102,7 +103,9 @@ def pull_health_outcomes(config: dict[str, Any]) -> pd.DataFrame:
     state_fips = config["state_fips"]
     full_fips = config["full_fips"]
 
-    logger.info(f"Pulling CDC PLACES health outcomes for {city} (state FIPS: {state_fips})")
+    logger.info(
+        f"Pulling CDC PLACES health outcomes for {city} (state FIPS: {state_fips})"
+    )
 
     # Step 1 — Fetch raw data from Socrata API
     raw_df = _fetch_places_data(full_fips, config)
@@ -126,6 +129,7 @@ def pull_health_outcomes(config: dict[str, Any]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _fetch_places_data(
     full_fips: str,
@@ -186,7 +190,9 @@ def _fetch_places_data(
     # for large states like California or Texas
     while True:
         params["$offset"] = page * PAGE_SIZE
-        logger.debug(f"Fetching CDC PLACES page {page + 1} (offset={params['$offset']})")
+        logger.debug(
+            f"Fetching CDC PLACES page {page + 1} (offset={params['$offset']})"
+        )
 
         response = _request_with_retry(CDC_PLACES_URL, params, headers)
         records = response.json()
@@ -246,9 +252,7 @@ def _process_places_data(
 
     # Filter to county — locationid is the 11-digit tract GEOID
     # It starts with the 5-digit county FIPS
-    county_df = raw_df[
-        raw_df["locationid"].str.startswith(full_fips)
-    ].copy()
+    county_df = raw_df[raw_df["locationid"].str.startswith(full_fips)].copy()
 
     logger.debug(f"Filtered to {len(county_df)} records for county FIPS {full_fips}")
 
@@ -262,9 +266,8 @@ def _process_places_data(
     # 2022 and 2023 rows). Keep only the latest year per tract and measure,
     # so the pivot below never averages two different years together.
     if "year" in county_df.columns:
-        county_df = (
-            county_df.sort_values("year")
-            .drop_duplicates(subset=["locationid", "measureid"], keep="last")
+        county_df = county_df.sort_values("year").drop_duplicates(
+            subset=["locationid", "measureid"], keep="last"
         )
 
     # Pivot from long to wide format
@@ -322,9 +325,7 @@ def _request_with_retry(
     """HTTP GET with retry logic — same pattern as epa_aqs.py."""
     for attempt in range(1, max_retries + 1):
         try:
-            response = requests.get(
-                url, params=params, headers=headers, timeout=30
-            )
+            response = requests.get(url, params=params, headers=headers, timeout=30)
             response.raise_for_status()
             return response
         except requests.exceptions.HTTPError as e:
@@ -332,7 +333,9 @@ def _request_with_retry(
                 raise
             logger.warning(f"CDC PLACES server error attempt {attempt}/{max_retries}")
         except requests.exceptions.RequestException as e:
-            logger.warning(f"CDC PLACES network error attempt {attempt}/{max_retries}: {e}")
+            logger.warning(
+                f"CDC PLACES network error attempt {attempt}/{max_retries}: {e}"
+            )
         if attempt < max_retries:
             time.sleep(delay_seconds)
     raise requests.exceptions.RequestException(

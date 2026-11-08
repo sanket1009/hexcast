@@ -30,7 +30,8 @@ Storage backends:
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
 import pandas as pd
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
@@ -44,6 +45,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Local backend (DuckDB)
 # ---------------------------------------------------------------------------
+
 
 def _is_local(config: dict[str, Any]) -> bool:
     """True when config selects the local DuckDB backend instead of BigQuery."""
@@ -65,11 +67,14 @@ def _local_schema(config: dict[str, Any]) -> str:
 
 
 def _local_table_exists(con, schema: str, table_name: str) -> bool:
-    return con.execute(
-        "SELECT COUNT(*) FROM information_schema.tables "
-        "WHERE table_schema = ? AND table_name = ?",
-        [schema, table_name],
-    ).fetchone()[0] > 0
+    return (
+        con.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = ? AND table_name = ?",
+            [schema, table_name],
+        ).fetchone()[0]
+        > 0
+    )
 
 
 def _local_write(
@@ -93,7 +98,9 @@ def _local_write(
                 raise ValueError(f"WRITE_EMPTY: {full_table} already has data")
 
         if write_disposition == "WRITE_TRUNCATE" or not exists:
-            con.execute(f"CREATE OR REPLACE TABLE {full_table} AS SELECT * FROM incoming_df")
+            con.execute(
+                f"CREATE OR REPLACE TABLE {full_table} AS SELECT * FROM incoming_df"
+            )
         else:
             # WRITE_APPEND: BY NAME matches columns by name, not position,
             # like a BigQuery load job does
@@ -125,6 +132,7 @@ def _local_query(query: str, config: dict[str, Any]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Client factory
 # ---------------------------------------------------------------------------
+
 
 def get_client(config: dict[str, Any]) -> bigquery.Client:
     """
@@ -180,7 +188,7 @@ def get_client(config: dict[str, Any]) -> bigquery.Client:
         # Used in CI/CD and when running on GCP infrastructure
         client = bigquery.Client(project=project_id)
 
-    logger.debug(f"BigQuery client created successfully")
+    logger.debug("BigQuery client created successfully")
     return client
 
 
@@ -209,7 +217,9 @@ def _partition_values(df: pd.DataFrame) -> list[tuple]:
     return [tuple(row) for row in pairs.itertuples(index=False, name=None)]
 
 
-def _local_replace_partition(df: pd.DataFrame, table_name: str, config: dict[str, Any]) -> None:
+def _local_replace_partition(
+    df: pd.DataFrame, table_name: str, config: dict[str, Any]
+) -> None:
     """DuckDB: delete the incoming partitions, insert the new rows, one transaction."""
     schema = _local_schema(config)
     full_table = f'"{schema}"."{table_name}"'
@@ -230,7 +240,9 @@ def _local_replace_partition(df: pd.DataFrame, table_name: str, config: dict[str
                         f"DELETE FROM {full_table} WHERE week_start_date = ? AND city_fips = ?",
                         [week, city],
                     )
-                con.execute(f"INSERT INTO {full_table} BY NAME SELECT * FROM incoming_df")
+                con.execute(
+                    f"INSERT INTO {full_table} BY NAME SELECT * FROM incoming_df"
+                )
                 con.execute("COMMIT")
             except Exception:
                 con.execute("ROLLBACK")
@@ -243,7 +255,9 @@ def _local_replace_partition(df: pd.DataFrame, table_name: str, config: dict[str
     )
 
 
-def _gcp_replace_partition(df: pd.DataFrame, full_table_id: str, client: bigquery.Client) -> None:
+def _gcp_replace_partition(
+    df: pd.DataFrame, full_table_id: str, client: bigquery.Client
+) -> None:
     """
     BigQuery: load to a staging table, then delete matching partitions and
     insert from staging in one multi-statement transaction.
@@ -290,7 +304,7 @@ def write_dataframe(
     df: pd.DataFrame,
     table_name: str,
     config: dict[str, Any],
-    write_disposition: Optional[str] = None,
+    write_disposition: str | None = None,
 ) -> None:
     """
     Write a pandas DataFrame to a BigQuery table.
@@ -383,7 +397,9 @@ def write_dataframe(
         # This keeps query costs low as the dataset grows over weeks
         time_partitioning=bigquery.TimePartitioning(
             field=config["bigquery"]["partition_field"],
-        ) if _has_partition_field(df, config) else None,
+        )
+        if _has_partition_field(df, config)
+        else None,
     )
 
     # Submit the load job and wait for completion
@@ -401,6 +417,7 @@ def write_dataframe(
 # ---------------------------------------------------------------------------
 # Read operations
 # ---------------------------------------------------------------------------
+
 
 def read_query(
     query: str,
@@ -446,7 +463,7 @@ def read_query(
         project=project_id,
     )
 
-    logger.info(f"Executing BigQuery query")
+    logger.info("Executing BigQuery query")
     logger.debug(f"Query: {query[:200]}...")  # log first 200 chars only
 
     client = get_client(config)
@@ -468,8 +485,8 @@ def read_query(
 def read_table(
     table_name: str,
     config: dict[str, Any],
-    columns: Optional[list[str]] = None,
-    where: Optional[str] = None,
+    columns: list[str] | None = None,
+    where: str | None = None,
 ) -> pd.DataFrame:
     """
     Read an entire BigQuery table into a DataFrame.
@@ -525,6 +542,7 @@ def read_table(
 # ---------------------------------------------------------------------------
 # Utility operations
 # ---------------------------------------------------------------------------
+
 
 def table_exists(
     table_name: str,
@@ -606,15 +624,16 @@ def get_row_count(
         return 0
 
     if _is_local(config):
-        df = read_query(f"SELECT COUNT(*) AS row_count FROM {{dataset}}.{table_name}", config)
+        df = read_query(
+            f"SELECT COUNT(*) AS row_count FROM {{dataset}}.{table_name}", config
+        )
         return int(df["row_count"].iloc[0])
 
     project_id = config["secrets"]["GCP_PROJECT_ID"]
     dataset = config["gcp"]["bigquery_dataset"]
 
     df = read_query(
-        f"SELECT COUNT(*) as row_count "
-        f"FROM `{project_id}.{dataset}.{table_name}`",
+        f"SELECT COUNT(*) as row_count FROM `{project_id}.{dataset}.{table_name}`",
         config,
     )
     return int(df["row_count"].iloc[0])
@@ -623,6 +642,7 @@ def get_row_count(
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
 
 def _has_partition_field(
     df: pd.DataFrame,

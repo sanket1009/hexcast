@@ -42,7 +42,7 @@ h3==4.5.0                  # Uber H3 hexagonal spatial indexing
 pykrige==1.7.3             # Ordinary Kriging for PM2.5 interpolation
 matplotlib==3.11.1         # variogram diagnostic plots
 rasterstats==0.20.0        # zonal statistics — raster summarized by polygon
-rasterio==1.4.3            # raster I/O — read/write GeoTIFF files
+rasterio==1.4.4            # raster I/O — read/write GeoTIFF files
 xarray==2026.7.0           # N-dimensional labeled arrays for raster time stacks
 rioxarray==0.23.0          # rasterio extension for xarray
 scipy==1.18.1              # variogram fitting + Wilcoxon signed-rank test

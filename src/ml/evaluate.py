@@ -49,6 +49,7 @@ logger = get_logger(__name__)
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def evaluate_all_models(
     config: dict[str, Any],
     model_a,
@@ -111,9 +112,7 @@ def evaluate_all_models(
     auc_b = roc_auc_score(y, oof_preds_b)
     auc_c = roc_auc_score(y, oof_preds_c)
 
-    logger.info(
-        f"AUC scores: A={auc_a:.4f}, B={auc_b:.4f}, C={auc_c:.4f}"
-    )
+    logger.info(f"AUC scores: A={auc_a:.4f}, B={auc_b:.4f}, C={auc_c:.4f}")
 
     # Step 3 — DeLong's test: A vs B
     # Tests whether Model B's AUC is significantly better than Model A's
@@ -149,36 +148,49 @@ def evaluate_all_models(
 
     logger.info(f"Computing SHAP values for champion model: {champion_name}")
     shap_df = _compute_shap_values(
-        champion, champion_X, champion_features,
-        config, week_str,
+        champion,
+        champion_X,
+        champion_features,
+        config,
+        week_str,
     )
 
     # Step 6 — Log all results to MLflow
     _log_to_mlflow(
         config=config,
-        auc_a=auc_a, auc_b=auc_b, auc_c=auc_c,
-        brier_a=brier_a, brier_b=brier_b, brier_c=brier_c,
-        delong_stat=delong_stat, delong_pvalue=delong_pvalue,
-        auc_lift=auc_lift, is_significant=is_significant,
+        auc_a=auc_a,
+        auc_b=auc_b,
+        auc_c=auc_c,
+        brier_a=brier_a,
+        brier_b=brier_b,
+        brier_c=brier_c,
+        delong_stat=delong_stat,
+        delong_pvalue=delong_pvalue,
+        auc_lift=auc_lift,
+        is_significant=is_significant,
         champion_name=champion_name,
     )
 
     # Step 7 — Write evaluation results to BigQuery
-    eval_df = pd.DataFrame([{
-        "week_str": week_str,
-        "city_fips": full_fips,
-        "auc_model_a": round(auc_a, 6),
-        "auc_model_b": round(auc_b, 6),
-        "auc_model_c": round(auc_c, 6),
-        "auc_lift_a_to_b": round(auc_lift, 6),
-        "delong_statistic": round(delong_stat, 6),
-        "delong_pvalue": round(delong_pvalue, 6),
-        "delong_significant": is_significant,
-        "brier_model_a": round(brier_a, 6),
-        "brier_model_b": round(brier_b, 6),
-        "brier_model_c": round(brier_c, 6),
-        "champion_model": champion_name,
-    }])
+    eval_df = pd.DataFrame(
+        [
+            {
+                "week_str": week_str,
+                "city_fips": full_fips,
+                "auc_model_a": round(auc_a, 6),
+                "auc_model_b": round(auc_b, 6),
+                "auc_model_c": round(auc_c, 6),
+                "auc_lift_a_to_b": round(auc_lift, 6),
+                "delong_statistic": round(delong_stat, 6),
+                "delong_pvalue": round(delong_pvalue, 6),
+                "delong_significant": is_significant,
+                "brier_model_a": round(brier_a, 6),
+                "brier_model_b": round(brier_b, 6),
+                "brier_model_c": round(brier_c, 6),
+                "champion_model": champion_name,
+            }
+        ]
+    )
 
     write_dataframe(eval_df, "model_evaluation", config)
     write_dataframe(shap_df, "shap_values", config)
@@ -209,6 +221,7 @@ def evaluate_all_models(
 # ---------------------------------------------------------------------------
 # Private functions
 # ---------------------------------------------------------------------------
+
 
 def _get_oof_predictions(
     model,
@@ -253,6 +266,7 @@ def _get_oof_predictions(
     for fold, (train_idx, test_idx) in enumerate(cv.split(X, groups=groups)):
         # Clone model to avoid state leakage between folds
         from sklearn.base import clone
+
         fold_model = clone(model)
 
         # Train on this fold's training set
@@ -329,18 +343,20 @@ def _delongs_test(
     # V10[i] = P(score_A(positive_i) > score_A(negative_j))
     # These are the structural components of the AUC estimator
     def placement_values_10(pos_scores, neg_scores):
-        return np.array([
-            np.mean(pos_score > neg_scores) +
-            0.5 * np.mean(pos_score == neg_scores)
-            for pos_score in pos_scores
-        ])
+        return np.array(
+            [
+                np.mean(pos_score > neg_scores) + 0.5 * np.mean(pos_score == neg_scores)
+                for pos_score in pos_scores
+            ]
+        )
 
     def placement_values_01(pos_scores, neg_scores):
-        return np.array([
-            np.mean(pos_scores > neg_score) +
-            0.5 * np.mean(pos_scores == neg_score)
-            for neg_score in neg_scores
-        ])
+        return np.array(
+            [
+                np.mean(pos_scores > neg_score) + 0.5 * np.mean(pos_scores == neg_score)
+                for neg_score in neg_scores
+            ]
+        )
 
     v10_a = placement_values_10(pos_a, neg_a)
     v01_a = placement_values_01(pos_a, neg_a)
@@ -366,7 +382,9 @@ def _delongs_test(
     se_diff = np.sqrt(contrast @ s @ contrast)
 
     if se_diff == 0:
-        logger.warning("Standard error of AUC difference is zero — models may be identical")
+        logger.warning(
+            "Standard error of AUC difference is zero — models may be identical"
+        )
         return 0.0, 1.0
 
     z_stat = auc_diff / se_diff
@@ -434,8 +452,7 @@ def _compute_shap_values(
     n_background = config["ml"]["shap_background_samples"]
 
     logger.info(
-        f"Computing SHAP values for {X.shape[0]:,} tracts, "
-        f"{X.shape[1]} features"
+        f"Computing SHAP values for {X.shape[0]:,} tracts, {X.shape[1]} features"
     )
 
     # TreeExplainer is optimized for tree-based models
@@ -444,7 +461,7 @@ def _compute_shap_values(
     explainer = shap.TreeExplainer(
         model,
         data=X[:n_background],  # background dataset for base value
-        feature_names=feature_names[:X.shape[1]],
+        feature_names=feature_names[: X.shape[1]],
     )
 
     # Compute SHAP values for all tracts
@@ -459,22 +476,28 @@ def _compute_shap_values(
         shap_values = shap_values[1]
 
     logger.info(
-        f"SHAP values computed. "
-        f"Mean absolute SHAP by feature:\n" +
-        "\n".join([
-            f"  {name}: {abs_val:.4f}"
-            for name, abs_val in sorted(
-                zip(feature_names[:X.shape[1]], np.abs(shap_values).mean(axis=0)),
-                key=lambda x: x[1],
-                reverse=True,
-            )[:5]
-        ])
+        "SHAP values computed. "
+        "Mean absolute SHAP by feature:\n"
+        + "\n".join(
+            [
+                f"  {name}: {abs_val:.4f}"
+                for name, abs_val in sorted(
+                    zip(
+                        feature_names[: X.shape[1]],
+                        np.abs(shap_values).mean(axis=0),
+                        strict=False,
+                    ),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:5]
+            ]
+        )
     )
 
     # Convert to DataFrame
     shap_df = pd.DataFrame(
         shap_values,
-        columns=[f"shap_{name}" for name in feature_names[:X.shape[1]]],
+        columns=[f"shap_{name}" for name in feature_names[: X.shape[1]]],
     )
 
     # Add metadata

@@ -29,8 +29,8 @@ Usage:
 """
 
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from itertools import zip_longest
-from datetime import datetime, timezone
 from typing import Any
 
 import anthropic
@@ -50,19 +50,24 @@ class BriefingError(Exception):
 # Input contract: what the pipeline hands us for each tract
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class TractRisk:
     geoid: str
-    risk_rank: int                   # 1 = highest burden in the city (record only)
-    tract_count: int                 # tracts ranked in the same city and week
-    urgency: str                     # one of urgency_levels, set from burden_class
-    drivers: list[str]               # risk domains, keys of driver_queries
-    indicators: dict[str, float]     # plain-language metric name -> value
-    vulnerable_groups: list[str] = field(default_factory=list)  # e.g. ["older adults"], set by the pipeline
+    risk_rank: int  # 1 = highest burden in the city (record only)
+    tract_count: int  # tracts ranked in the same city and week
+    urgency: str  # one of urgency_levels, set from burden_class
+    drivers: list[str]  # risk domains, keys of driver_queries
+    indicators: dict[str, float]  # plain-language metric name -> value
+    vulnerable_groups: list[str] = field(
+        default_factory=list
+    )  # e.g. ["older adults"], set by the pipeline
+
 
 # ---------------------------------------------------------------------------
 # Output schema Claude must follow (structured outputs)
 # ---------------------------------------------------------------------------
+
 
 class Action(BaseModel):
     action: str = Field(
@@ -88,16 +93,17 @@ class BriefingDraft(BaseModel):
 # Final briefing: verified, ready to store
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Briefing:
     geoid: str
     urgency: str
     summary: str
     key_risks: list[str]
-    actions: list[dict[str, Any]]    # {"action": str, "citations": [str]}
+    actions: list[dict[str, Any]]  # {"action": str, "citations": [str]}
     data_gaps: list[str]
-    sources: list[str]               # citations actually used
-    retrieved_chunk_ids: list[str]   # audit trail: everything Claude saw
+    sources: list[str]  # citations actually used
+    retrieved_chunk_ids: list[str]  # audit trail: everything Claude saw
     model: str
     generated_at: str
 
@@ -191,7 +197,9 @@ class BriefingGenerator:
     def generate(self, tract: TractRisk) -> Briefing:
         urgency = tract.urgency
         if urgency not in self.levels:
-            raise ValueError(f"Tract {tract.geoid}: urgency {urgency!r} not in {self.levels}")
+            raise ValueError(
+                f"Tract {tract.geoid}: urgency {urgency!r} not in {self.levels}"
+            )
         chunks = self._retrieve(tract)
         excerpts = {f"E{i}": c for i, c in enumerate(chunks, start=1)}
 
@@ -204,15 +212,20 @@ class BriefingGenerator:
             model=self.model,
             max_tokens=self.max_tokens,
             system=SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": self._build_prompt(tract, urgency, excerpts),
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": self._build_prompt(tract, urgency, excerpts),
+                }
+            ],
             output_format=BriefingDraft,
         )
 
         # Refusals and cut-off responses may not match the schema
-        if response.stop_reason in ("refusal", "max_tokens") or response.parsed_output is None:
+        if (
+            response.stop_reason in ("refusal", "max_tokens")
+            or response.parsed_output is None
+        ):
             raise BriefingError(
                 f"Tract {tract.geoid}: no valid briefing "
                 f"(stop_reason={response.stop_reason})"
@@ -232,7 +245,7 @@ class BriefingGenerator:
             sources=sources,
             retrieved_chunk_ids=[c.id for c in chunks],
             model=self.model,
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            generated_at=datetime.now(UTC).isoformat(),
         )
 
     # -- helpers ------------------------------------------------------------
@@ -254,10 +267,14 @@ class BriefingGenerator:
             # One ranked list per group, nearest first. Search wider than the
             # quota so the one-per-page rule has other pages to choose from.
             ranked_lists = [
-                self.retriever.retrieve(template.format(group=g), top_k=CANDIDATES_PER_DRIVER)
+                self.retriever.retrieve(
+                    template.format(group=g), top_k=CANDIDATES_PER_DRIVER
+                )
                 for g in groups
             ]
-            for chunk in pick_excerpts(ranked_lists, self.per_driver, exclude=set(selected)):
+            for chunk in pick_excerpts(
+                ranked_lists, self.per_driver, exclude=set(selected)
+            ):
                 selected[chunk.id] = chunk
 
         return list(selected.values())
@@ -298,11 +315,17 @@ class BriefingGenerator:
         for a in actions:
             valid_ids = [eid for eid in a.excerpt_ids if eid in excerpts]
             if not valid_ids:
-                logger.warning(f"Tract {geoid}: dropped ungrounded action: {a.action!r}")
+                logger.warning(
+                    f"Tract {geoid}: dropped ungrounded action: {a.action!r}"
+                )
                 continue
-            grounded.append({
-                "action": a.action,
-                "citations": list(dict.fromkeys(excerpts[eid].citation for eid in valid_ids)),
-            })
+            grounded.append(
+                {
+                    "action": a.action,
+                    "citations": list(
+                        dict.fromkeys(excerpts[eid].citation for eid in valid_ids)
+                    ),
+                }
+            )
 
         return grounded

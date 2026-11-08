@@ -50,7 +50,9 @@ DRIVE_EXCLUDE = {
     ),
     "motor_vehicle": re.compile("no"),
     "motorcar": re.compile("no"),
-    "service": re.compile("alley|driveway|emergency_access|parking|parking_aisle|private"),
+    "service": re.compile(
+        "alley|driveway|emergency_access|parking|parking_aisle|private"
+    ),
 }
 
 
@@ -68,14 +70,18 @@ def is_drive_way(tags) -> bool:
 def download_extract(url: str, path: Path, refresh: bool = False) -> Path:
     """Download a Geofabrik extract to path, streaming to disk."""
     if path.exists() and not refresh:
-        logger.info(f"Using cached OSM extract: {path} ({path.stat().st_size / 1e6:,.0f} MB)")
+        logger.info(
+            f"Using cached OSM extract: {path} ({path.stat().st_size / 1e6:,.0f} MB)"
+        )
         return path
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".part")
     logger.info(f"Downloading OSM extract {url}")
     start = time.time()
-    with requests.get(url, stream=True, timeout=60, headers={"User-Agent": "chbindex/1.0"}) as r:
+    with requests.get(
+        url, stream=True, timeout=60, headers={"User-Agent": "chbindex/1.0"}
+    ) as r:
         r.raise_for_status()
         total = int(r.headers.get("Content-Length", 0))
         done, next_log = 0, 0.1
@@ -87,7 +93,9 @@ def download_extract(url: str, path: Path, refresh: bool = False) -> Path:
                     logger.info(f"  {done / 1e6:,.0f} / {total / 1e6:,.0f} MB")
                     next_log += 0.1
     tmp.replace(path)  # only a complete download gets the real name
-    logger.info(f"Downloaded {path.stat().st_size / 1e6:,.0f} MB in {time.time() - start:.0f}s")
+    logger.info(
+        f"Downloaded {path.stat().st_size / 1e6:,.0f} MB in {time.time() - start:.0f}s"
+    )
     return path
 
 
@@ -138,14 +146,20 @@ def filter_drive_ways(
         .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
         .with_filter(osmium.filter.KeyFilter("highway"))
     )
-    with osmium.BackReferenceWriter(str(out_osm), ref_src=str(pbf), overwrite=True) as writer:
+    with osmium.BackReferenceWriter(
+        str(out_osm), ref_src=str(pbf), overwrite=True
+    ) as writer:
         for way in fp:
             if not is_drive_way(way.tags):
                 continue
             inside = False
             for n in way.nodes:
                 loc = n.location
-                if loc.valid() and west <= loc.lon <= east and south <= loc.lat <= north:
+                if (
+                    loc.valid()
+                    and west <= loc.lon <= east
+                    and south <= loc.lat <= north
+                ):
                     inside = True
                     break
             if inside:
@@ -179,7 +193,9 @@ def graph_from_extract(
     if n == 0:
         raise ValueError("No drive ways found inside the bbox; check bbox and extract")
 
-    logger.info("Building graph from filtered OSM XML (simplify, keep largest component)")
+    logger.info(
+        "Building graph from filtered OSM XML (simplify, keep largest component)"
+    )
     G = ox.graph_from_xml(xml, simplify=True, retain_all=False)
     xml.unlink(missing_ok=True)  # intermediate; the graph is cached as GraphML upstream
     return G

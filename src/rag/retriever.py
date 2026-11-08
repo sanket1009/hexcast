@@ -37,6 +37,7 @@ logger = get_logger(__name__)
 # Result type
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     """One policy chunk returned by a search."""
@@ -56,6 +57,7 @@ class RetrievedChunk:
 # ---------------------------------------------------------------------------
 # Retriever
 # ---------------------------------------------------------------------------
+
 
 class PolicyRetriever:
     """Semantic search over one city's policy document collection."""
@@ -109,6 +111,7 @@ class PolicyRetriever:
                 result["documents"][0],
                 result["metadatas"][0],
                 result["distances"][0],
+                strict=False,
             )
         ]
 

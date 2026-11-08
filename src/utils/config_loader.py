@@ -24,8 +24,7 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ValidationError, field_validator
-
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Project root — all relative paths resolve from here
@@ -46,8 +45,10 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 # clear ValidationError immediately — not a cryptic KeyError later.
 # ---------------------------------------------------------------------------
 
+
 class BboxConfig(BaseModel):
     """Bounding box for the city — must be valid lat/lon ranges."""
+
     west: float
     south: float
     east: float
@@ -72,10 +73,11 @@ class BboxConfig(BaseModel):
 
 class EpaAqsConfig(BaseModel):
     """EPA AQS API parameters — required for PM2.5 ingestion."""
+
     state_code: str
     county_code: str
     parameter_code: str
-    monitor_count: int          # monitors expected inside the city county
+    monitor_count: int  # monitors expected inside the city county
     # Neighbor monitors (counties from top-level neighbor_counties) farther than this from the city bbox are dropped
     # (different air basin). 0 keeps none.
     neighbor_buffer_km: float = 0.0
@@ -83,35 +85,38 @@ class EpaAqsConfig(BaseModel):
 
 class GeeConfig(BaseModel):
     """Google Earth Engine parameters — required for LST ingestion."""
-    collections: list[str]              # Landsat 8 + 9 Level-2, merged
+
+    collections: list[str]  # Landsat 8 + 9 Level-2, merged
     scale: int
     cloud_cover_max: int
     lst_band: str
-    composite_window_days: int = 32     # trailing window ending on week end
-    min_coverage: float = 0.8           # warn below this clear-pixel share
-    download_tiles: int = 3             # n x n tiles for local downloads
+    composite_window_days: int = 32  # trailing window ending on week end
+    min_coverage: float = 0.8  # warn below this clear-pixel share
+    download_tiles: int = 3  # n x n tiles for local downloads
 
 
 class OsmnxConfig(BaseModel):
     """OSMnx road network parameters — required for 2SFCA access."""
+
     network_type: str
     speed_kmh_default: int
     # Where the road network comes from: "geofabrik" (regional .osm.pbf
     # extract, filtered locally; no rate limits) or "overpass" (live API)
     road_source: str = "overpass"
-    geofabrik_url: str | None = None    # required when road_source is geofabrik
+    geofabrik_url: str | None = None  # required when road_source is geofabrik
     # Overpass server; None keeps OSMnx's default (overpass-api.de)
     overpass_url: str | None = None
-    download_retries: int = 5           # attempts, with 1, 2, 4, 8 min waits
+    download_retries: int = 5  # attempts, with 1, 2, 4, 8 min waits
 
 
 class HealthcareConfig(BaseModel):
     """Healthcare facility parameters — required for 2SFCA access."""
+
     er_catchment_minutes: int
     primary_care_catchment_minutes: int
     er_count: int
     hospital_source: str | None = None  # e.g. "cdph_ca"; see src/ingestion/hospitals.py
-    ed_only: bool = True                # access score uses hospitals with an ED only
+    ed_only: bool = True  # access score uses hospitals with an ED only
     # Hospitals, tracts (demand) and roads are loaded this far beyond the
     # city bbox, so tracts near the county line see the ERs they really use
     buffer_km: float = 0.0
@@ -120,29 +125,57 @@ class HealthcareConfig(BaseModel):
     snap_max_m: float = 2000.0
 
 
-class BurdenThresholdsConfig(BaseModel):
-    """Compound burden score thresholds for risk classification."""
+class BurdenPercentilesConfig(BaseModel):
+    """
+    City percentile cutoffs (0-100) for burden classes, used by compound_score.py.
+    A tract at or above a cutoff gets that class.
+    """
+
+    elevated: float
     high_risk: float
     critical: float
 
-    @field_validator("high_risk", "critical")
+    @field_validator("elevated", "high_risk", "critical")
     @classmethod
-    def valid_threshold(cls, v: float) -> float:
-        """Thresholds must be between 0 and 1."""
-        if not 0 <= v <= 1:
-            raise ValueError(f"Threshold {v} must be between 0.0 and 1.0")
+    def valid_percentile(cls, v: float) -> float:
+        if not 0 < v < 100:
+            raise ValueError(f"Percentile {v} must be between 0 and 100")
         return v
+
+    @model_validator(mode="after")
+    def increasing(self) -> "BurdenPercentilesConfig":
+        if not self.elevated < self.high_risk < self.critical:
+            raise ValueError("Cutoffs must increase: elevated < high_risk < critical")
+        return self
 
 
 class ScheduleConfig(BaseModel):
     """Airflow schedule configuration."""
+
     cron: str
     start_date: str
     catchup: bool
 
 
+class ReportingLayer(BaseModel):
+    """One level of reporting geography, read from an ArcGIS REST layer."""
+
+    url: str
+    name_field: str
+    id_field: str | None = None
+
+
+class AlertsConfig(BaseModel):
+    """Weekly critical-tract email. Recipients come from ALERT_EMAIL_TO, not config."""
+
+    top_n: int = (
+        5  # communities shown per change type in the email body; all are in the CSV
+    )
+
+
 class GcpConfig(BaseModel):
     """GCP resource configuration."""
+
     bigquery_dataset: str
     gcs_bucket: str
     gcs_raster_prefix: str
@@ -154,6 +187,7 @@ class CityConfig(BaseModel):
     Complete city configuration — validates los_angeles.yaml or chicago.yaml.
     All fields are required unless a default is provided.
     """
+
     # Identity
     city_name: str
     county_name: str
@@ -182,7 +216,7 @@ class CityConfig(BaseModel):
     healthcare: HealthcareConfig
 
     # Thresholds
-    burden_thresholds: BurdenThresholdsConfig
+    burden_percentiles: BurdenPercentilesConfig
     hotspot_significance: dict[str, float]
 
     # Airflow
@@ -190,6 +224,13 @@ class CityConfig(BaseModel):
 
     # GCP
     gcp: GcpConfig
+
+    # Alerts
+    alerts: AlertsConfig = AlertsConfig()
+
+    # Reporting geography for the weekly report: level -> layer
+    # (e.g. region = SPA, district = Health District, community = CSA)
+    reporting_areas: dict[str, ReportingLayer] = {}
 
     # RAG
     policy_docs_dir: str
@@ -222,6 +263,7 @@ class CityConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # Core loader function
 # ---------------------------------------------------------------------------
+
 
 def load_config(city_name: str) -> dict[str, Any]:
     """
@@ -276,18 +318,16 @@ def load_config(city_name: str) -> dict[str, Any]:
             f"Available cities: {_list_available_cities()}"
         )
 
-    with open(city_config_path, "r") as f:
+    with open(city_config_path) as f:
         city_raw = yaml.safe_load(f)
 
     # Step 3 — Load global pipeline YAML
     pipeline_config_path = PROJECT_ROOT / "config" / "pipeline.yaml"
 
     if not pipeline_config_path.exists():
-        raise FileNotFoundError(
-            f"Pipeline config not found: {pipeline_config_path}"
-        )
+        raise FileNotFoundError(f"Pipeline config not found: {pipeline_config_path}")
 
-    with open(pipeline_config_path, "r") as f:
+    with open(pipeline_config_path) as f:
         pipeline_raw = yaml.safe_load(f)
 
     # Step 4 — Validate city config against Pydantic model
@@ -305,10 +345,10 @@ def load_config(city_name: str) -> dict[str, Any]:
     # City config takes precedence over pipeline config if keys conflict.
     # In practice there are no overlapping keys — they cover different domains.
     merged = {
-        **pipeline_raw,                    # global settings first
-        **validated_city.model_dump(),     # city settings override if conflict
-        "city_name_slug": city_name,       # normalized city identifier
-        "project_root": str(PROJECT_ROOT), # absolute path for file operations
+        **pipeline_raw,  # global settings first
+        **validated_city.model_dump(),  # city settings override if conflict
+        "city_name_slug": city_name,  # normalized city identifier
+        "project_root": str(PROJECT_ROOT),  # absolute path for file operations
     }
 
     # Step 6 — Inject secrets from environment variables
@@ -346,6 +386,7 @@ def _load_secrets() -> dict[str, str]:
         "EPA_AQS_KEY": "EPA AQS API key (PM2.5 ingestion)",
         "CDC_SOCRATA_APP_TOKEN": "Optional CDC PLACES app token (raises rate limit)",
         "GEE_PROJECT_ID": "Cloud project registered for Earth Engine",
+        "ALERT_EMAIL_TO": "Comma-separated recipients of the weekly critical-tract email",
     }
 
     for key, description in required_secrets.items():
@@ -375,6 +416,7 @@ def _list_available_cities() -> list[str]:
 # Instead of config["gcp"]["bigquery_dataset"] everywhere, modules can
 # call get_bigquery_dataset(config) which is self-documenting.
 # ---------------------------------------------------------------------------
+
 
 def get_city_fips(config: dict[str, Any]) -> str:
     """Return the full 5-digit county FIPS code."""
@@ -419,10 +461,10 @@ def get_gcs_bucket(config: dict[str, Any]) -> str:
 
 
 def get_high_risk_threshold(config: dict[str, Any]) -> float:
-    """Return the compound burden score threshold for high-risk classification."""
-    return config["burden_thresholds"]["high_risk"]
+    """City percentile (0-100) at or above which a tract is HIGH."""
+    return config["burden_percentiles"]["high_risk"]
 
 
 def get_critical_threshold(config: dict[str, Any]) -> float:
-    """Return the compound burden score threshold for critical classification."""
-    return config["burden_thresholds"]["critical"]
+    """City percentile (0-100) at or above which a tract is CRITICAL."""
+    return config["burden_percentiles"]["critical"]

@@ -113,9 +113,10 @@ healthcare:
 # thresholds can be tuned here without touching LA config.
 # -----------------------------------------------------------------------------
 
-burden_thresholds:
-  high_risk: 0.75
-  critical: 0.90
+burden_percentiles:
+  elevated: 50
+  high_risk: 75
+  critical: 90
 
 hotspot_significance:
   standard: 0.05

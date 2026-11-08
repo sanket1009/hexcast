@@ -9,7 +9,9 @@
 #   - pytest, ruff, black           (dev tools — not needed in production)
 #   - apache-airflow               (already in the base image)
 #
-# Versions are intentionally compatible with Airflow 3.3.0 constraints.
+# Versions match requirements.txt, so tasks run the same code paths as local
+# runs. They do NOT follow Airflow's constraints file (which pins numpy 1.26 and
+# pandas 2.1); Dockerfile.airflow pins apache-airflow itself instead.
 # =============================================================================
 
 # Spatial
@@ -22,14 +24,16 @@ networkx==3.5
 h3==4.5.0
 pykrige==1.7.3
 rasterstats==0.20.0
-rasterio==1.4.3
+rasterio==1.4.4
 xarray==2026.7.0
 rioxarray==0.23.0
-scipy==1.15.3
+scipy==1.18.1
 pysal==24.1
 libpysal==4.12.1
 esda==2.6.0
 mgwr==2.2.1
+osmium==4.3.2              # road network extract (src/utils/osm_extract.py)
+matplotlib==3.11.1         # variogram and access plots
 
 # ML
 xgboost==3.4.0
@@ -41,10 +45,8 @@ shap==0.51.0
 # RAG
 chromadb==1.5.9
 sentence-transformers==4.1.0
-anthropic==0.57.0
-langchain==0.3.25
-langchain-community==0.3.25
-pypdf==5.6.0
+anthropic==2.3.0
+pypdf==7.0.0
 jinja2==3.1.6
 tiktoken==0.9.0
 
@@ -55,6 +57,7 @@ google-cloud-bigquery-storage==2.40.0
 google-cloud-storage==2.19.0
 pyarrow==20.0.0
 db-dtypes==1.4.2
+duckdb==1.5.6              # local warehouse (storage.backend: local)
 
 # Utilities
 pyyaml==6.0.3

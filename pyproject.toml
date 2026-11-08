@@ -115,7 +115,11 @@ ignore = [
 # 1. Standard library (os, sys, pathlib)
 # 2. Third party (geopandas, xgboost, fastapi)
 # 3. Local (src.utils.config_loader)
-known-first-party = ["src"]
+known-first-party = ["src", "chbindex_common"]
+# The repo has local mlflow/ and chromadb/ data folders. Without this, ruff
+# on a laptop treats those packages as first-party and CI (no such folders)
+# does not, so the two sort imports differently and CI fails.
+known-third-party = ["mlflow", "chromadb"]
 
 [tool.ruff.format]
 # Use double quotes for strings — consistent with black
@@ -134,6 +138,10 @@ indent-style = "space"
 
 # Where to find tests
 testpaths = ["tests"]
+
+# Put the repo root on sys.path so tests can import src.* however pytest is
+# launched (plain `pytest` in CI, `python -m pytest` locally)
+pythonpath = ["."]
 
 # Default options applied to every pytest run
 # -v: verbose output — shows each test name and result

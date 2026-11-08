@@ -57,7 +57,8 @@ Usage:
     df = compute_2sfca(config)
 """
 
-import io
+import hashlib
+import json
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -69,7 +70,12 @@ import osmnx as ox
 import pandas as pd
 import requests
 
-from src.utils.bigquery import read_query, table_exists, write_dataframe
+from src.utils.bigquery import (
+    REPLACE_PARTITION,
+    read_query,
+    table_exists,
+    write_dataframe,
+)
 from src.utils.config_loader import get_buffered_bbox
 from src.utils.logger import get_logger
 from src.utils.osm_extract import graph_from_extract
@@ -86,6 +92,14 @@ PER_RESIDENTS = 1_000
 
 # Road networks change slowly; reuse the downloaded graph across runs
 NETWORK_CACHE_DIR = Path("data") / "processed" / "road_network"
+
+# Weekly reuse: access only changes when tracts, hospitals, the road network,
+# the healthcare config, or the method change. Each run records a fingerprint
+# of those inputs; a week whose fingerprint matches an earlier week copies
+# that week's rows instead of rerunning the network analysis.
+# Bump METHOD_VERSION whenever the 2SFCA calculation itself changes.
+METHOD_VERSION = "e2sfca-gaussian-v1"
+RUNS_TABLE = "healthcare_access_runs"
 
 # Census Bureau 2020 Centers of Population by tract: where residents
 # actually live within each tract. Matches the 2020 tract boundaries used
@@ -108,10 +122,12 @@ OSM_HTTP_CACHE_DIR = Path("data") / "processed" / "osm_http_cache"
 # Main function
 # ---------------------------------------------------------------------------
 
+
 def compute_2sfca(
     config: dict[str, Any],
     week_start: datetime | None = None,
     refresh_network: bool = False,
+    reuse: bool = True,
 ) -> pd.DataFrame:
     """
     Compute Enhanced 2SFCA emergency care access for every city tract.
@@ -124,6 +140,11 @@ def compute_2sfca(
         Week the output is stamped with. Defaults to most recent Monday.
     refresh_network : bool
         Re-download the road network instead of using the cached GraphML.
+        Implies reuse=False.
+    reuse : bool
+        Copy an earlier week's rows when the inputs are unchanged (see
+        METHOD_VERSION). A 52-week backfill then runs the network analysis
+        once instead of 52 times.
 
     Returns
     -------
@@ -149,6 +170,22 @@ def compute_2sfca(
 
     # Step 2 — Supply: ED hospitals in the city and buffer
     hospitals_df = _load_hospital_data(config)
+
+    # Same inputs as an earlier week: copy its result, skip the network work
+    fingerprint = _inputs_fingerprint(tracts_df, hospitals_df, config)
+    if reuse and not refresh_network:
+        reused = _reuse_previous_week(config, fingerprint, week_start)
+        if reused is not None:
+            access_df, source_week = reused
+            _validate_output(access_df, catchment_minutes)
+            write_dataframe(
+                access_df,
+                "healthcare_access",
+                config,
+                write_disposition=REPLACE_PARTITION,
+            )
+            _record_run(config, week_start, fingerprint, source_week)
+            return access_df
 
     # Step 3 — Road network for the buffered bbox (cached)
     G = _get_road_network(config, refresh=refresh_network)
@@ -205,14 +242,108 @@ def compute_2sfca(
     access_df["city_fips"] = config["full_fips"]
 
     _validate_output(access_df, catchment_minutes)
-    write_dataframe(access_df, "healthcare_access", config)
+    write_dataframe(
+        access_df, "healthcare_access", config, write_disposition=REPLACE_PARTITION
+    )
+    _record_run(config, week_start, fingerprint, source_week=None)
 
     return access_df
 
 
 # ---------------------------------------------------------------------------
+# Reuse across weeks
+# ---------------------------------------------------------------------------
+
+
+def _inputs_fingerprint(
+    tracts_df: pd.DataFrame, hospitals_df: pd.DataFrame, config: dict[str, Any]
+) -> str:
+    """
+    Short hash of everything the access result depends on: tract locations
+    and population, hospital locations and beds, the healthcare config, the
+    cached road network file, and METHOD_VERSION.
+    """
+    h = hashlib.sha256(METHOD_VERSION.encode())
+    tracts = tracts_df[
+        ["geoid", "centroid_lat", "centroid_lon", "population", "in_city"]
+    ].sort_values("geoid")
+    hospitals = hospitals_df[
+        ["hospital_id", "beds", "latitude", "longitude"]
+    ].sort_values("hospital_id")
+    for frame in (tracts, hospitals):
+        h.update(
+            pd.util.hash_pandas_object(frame.round(6), index=False).values.tobytes()
+        )
+    h.update(json.dumps(config["healthcare"], sort_keys=True, default=str).encode())
+    for graph in sorted(NETWORK_CACHE_DIR.glob(f"{config['full_fips']}_*.graphml")):
+        h.update(f"{graph.name}:{graph.stat().st_size}".encode())
+    return h.hexdigest()[:16]
+
+
+def _reuse_previous_week(
+    config: dict[str, Any],
+    fingerprint: str,
+    week_start: datetime,
+) -> tuple[pd.DataFrame, str] | None:
+    """The latest other week computed from the same inputs, restamped for this week."""
+    if not table_exists(RUNS_TABLE, config):
+        return None
+    fips, week = config["full_fips"], week_start.strftime("%Y-%m-%d")
+    runs = read_query(
+        f"""
+        SELECT week_start_date FROM {{dataset}}.{RUNS_TABLE}
+        WHERE city_fips = '{fips}' AND inputs_hash = '{fingerprint}'
+          AND week_start_date != '{week}' AND computed_from IS NULL
+        ORDER BY week_start_date DESC LIMIT 1
+        """,
+        config,
+    )
+    if runs.empty:
+        return None
+    source = pd.Timestamp(runs["week_start_date"].iloc[0]).strftime("%Y-%m-%d")
+    df = read_query(
+        f"""
+        SELECT * FROM {{dataset}}.healthcare_access
+        WHERE city_fips = '{fips}' AND week_start_date = '{source}'
+        """,
+        config,
+    )
+    if df.empty:
+        return None
+    df["week_start_date"] = week_start.date()
+    logger.info(
+        f"Inputs unchanged since week {source}; reusing its access scores for {week}"
+    )
+    return df, source
+
+
+def _record_run(
+    config: dict[str, Any],
+    week_start: datetime,
+    fingerprint: str,
+    source_week: str | None,
+) -> None:
+    """One row per week: which inputs produced it, and the week it was copied from (if any)."""
+    write_dataframe(
+        pd.DataFrame(
+            {
+                "week_start_date": [week_start.date()],
+                "city_fips": [config["full_fips"]],
+                "inputs_hash": [fingerprint],
+                "computed_from": [source_week],
+                "recorded_at": [datetime.now()],
+            }
+        ),
+        RUNS_TABLE,
+        config,
+        write_disposition=REPLACE_PARTITION,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Inputs
 # ---------------------------------------------------------------------------
+
 
 def _load_demand_tracts(config: dict[str, Any]) -> pd.DataFrame:
     """
@@ -257,7 +388,9 @@ def _load_demand_tracts(config: dict[str, Any]) -> pd.DataFrame:
     df["population"] = pd.to_numeric(df["population"], errors="coerce")
     missing = df["population"].isna() & df["in_city"]
     if missing.any():
-        logger.warning(f"{int(missing.sum())} city tracts with missing population: treated as 0")
+        logger.warning(
+            f"{int(missing.sum())} city tracts with missing population: treated as 0"
+        )
     df["population"] = df["population"].fillna(0).clip(lower=0)
 
     logger.info(
@@ -290,13 +423,19 @@ def _apply_population_centroids(df: pd.DataFrame) -> pd.DataFrame:
             resp = requests.get(CENPOP_URL.format(state=st), timeout=60)
             resp.raise_for_status()
             path.write_bytes(resp.content)
-            logger.info(f"Downloaded Census 2020 tract population centers for state {st}")
+            logger.info(
+                f"Downloaded Census 2020 tract population centers for state {st}"
+            )
         cp = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
-        frames.append(pd.DataFrame({
-            "geoid": cp["STATEFP"] + cp["COUNTYFP"] + cp["TRACTCE"],
-            "pop_lat": pd.to_numeric(cp["LATITUDE"]),
-            "pop_lon": pd.to_numeric(cp["LONGITUDE"]),
-        }))
+        frames.append(
+            pd.DataFrame(
+                {
+                    "geoid": cp["STATEFP"] + cp["COUNTYFP"] + cp["TRACTCE"],
+                    "pop_lat": pd.to_numeric(cp["LATITUDE"]),
+                    "pop_lon": pd.to_numeric(cp["LONGITUDE"]),
+                }
+            )
+        )
     centers = pd.concat(frames, ignore_index=True)
 
     df = df.merge(centers, on="geoid", how="left")
@@ -332,7 +471,9 @@ def _load_hospital_data(config: dict[str, Any]) -> pd.DataFrame:
     df["beds"] = pd.to_numeric(df["beds"], errors="coerce")
     bad = ~(df["beds"] > 0)
     if bad.any():
-        logger.warning(f"Dropping {int(bad.sum())} hospitals without a positive bed count")
+        logger.warning(
+            f"Dropping {int(bad.sum())} hospitals without a positive bed count"
+        )
         df = df[~bad]
     df = df.reset_index(drop=True)
 
@@ -373,15 +514,21 @@ def _get_road_network(config: dict[str, Any], refresh: bool = False) -> nx.Multi
         )
         if source == "geofabrik":
             if network_type != "drive":
-                raise ValueError("road_source 'geofabrik' implements the 'drive' filter only")
+                raise ValueError(
+                    "road_source 'geofabrik' implements the 'drive' filter only"
+                )
             url = config["osmnx"].get("geofabrik_url")
             if not url:
-                raise ValueError("osmnx.geofabrik_url is required when road_source is 'geofabrik'")
+                raise ValueError(
+                    "osmnx.geofabrik_url is required when road_source is 'geofabrik'"
+                )
             G = graph_from_extract(url, bbox, OSM_EXTRACT_DIR, refresh=refresh)
         elif source == "overpass":
             G = _download_with_retry(config, bbox, network_type)
         else:
-            raise ValueError(f"Unknown osmnx.road_source '{source}' (use 'geofabrik' or 'overpass')")
+            raise ValueError(
+                f"Unknown osmnx.road_source '{source}' (use 'geofabrik' or 'overpass')"
+            )
         # Speed from OSM maxspeed tags; untagged roads get the mean of their
         # highway type, then the configured fallback
         G = ox.add_edge_speeds(G, fallback=config["osmnx"]["speed_kmh_default"])
@@ -391,7 +538,9 @@ def _get_road_network(config: dict[str, Any], refresh: bool = False) -> nx.Multi
         ox.save_graphml(G, path)
         logger.info(f"Saved road network to {path}")
 
-    logger.info(f"Road network: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges")
+    logger.info(
+        f"Road network: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges"
+    )
     return G
 
 
@@ -479,6 +628,7 @@ def _snap_to_network(
 # Travel times and 2SFCA
 # ---------------------------------------------------------------------------
 
+
 def _compute_travel_times(
     G: nx.MultiDiGraph,
     tracts_df: pd.DataFrame,
@@ -502,12 +652,16 @@ def _compute_travel_times(
     R = G.reverse(copy=False)
 
     node_to_tracts: dict[int, list[str]] = {}
-    for geoid, node in zip(tracts_df["geoid"], tracts_df["node"]):
+    for geoid, node in zip(tracts_df["geoid"], tracts_df["node"], strict=False):
         node_to_tracts.setdefault(node, []).append(geoid)
 
-    logger.info(f"Dijkstra from {len(hospitals_df)} hospitals (cutoff {catchment_minutes} min)")
+    logger.info(
+        f"Dijkstra from {len(hospitals_df)} hospitals (cutoff {catchment_minutes} min)"
+    )
     records = []
-    for k, (hid, hnode) in enumerate(zip(hospitals_df["hospital_id"], hospitals_df["node"]), 1):
+    for k, (hid, hnode) in enumerate(
+        zip(hospitals_df["hospital_id"], hospitals_df["node"], strict=False), 1
+    ):
         lengths = nx.single_source_dijkstra_path_length(
             R, source=hnode, cutoff=cutoff, weight="travel_time"
         )
@@ -518,10 +672,14 @@ def _compute_travel_times(
             logger.info(f"  {k}/{len(hospitals_df)} hospitals done")
 
     if not records:
-        raise ValueError("No tract-hospital pairs within the catchment. Check network and inputs.")
+        raise ValueError(
+            "No tract-hospital pairs within the catchment. Check network and inputs."
+        )
 
     df = pd.DataFrame(records, columns=["geoid", "hospital_id", "travel_time_minutes"])
-    df["decay_weight"] = np.exp(-(df["travel_time_minutes"] ** 2) / (2 * GAUSSIAN_BANDWIDTH ** 2))
+    df["decay_weight"] = np.exp(
+        -(df["travel_time_minutes"] ** 2) / (2 * GAUSSIAN_BANDWIDTH**2)
+    )
     logger.info(f"{len(df):,} tract-hospital pairs within {catchment_minutes} min")
     return df
 
@@ -541,9 +699,15 @@ def _compute_hospital_ratios(
     tt["weighted_demand"] = tt["population"] * tt["decay_weight"]
 
     ratios = (
-        tt.groupby("hospital_id")["weighted_demand"].sum()
-        .rename("total_weighted_demand").reset_index()
-        .merge(hospitals_df[["hospital_id", "beds", "in_city"]], on="hospital_id", how="left")
+        tt.groupby("hospital_id")["weighted_demand"]
+        .sum()
+        .rename("total_weighted_demand")
+        .reset_index()
+        .merge(
+            hospitals_df[["hospital_id", "beds", "in_city"]],
+            on="hospital_id",
+            how="left",
+        )
     )
     # A hospital with no residents in reach has no ratio (it serves nobody
     # in the model); it is dropped rather than divided by ~0
@@ -568,15 +732,23 @@ def _compute_tract_access(
     scored = reachable and has residents. Scored tracts with no ER in
     reach get 0 (a real desert); unscored tracts get NaN.
     """
-    tt = travel_times.merge(hospital_ratios[["hospital_id", "ratio"]], on="hospital_id", how="inner")
+    tt = travel_times.merge(
+        hospital_ratios[["hospital_id", "ratio"]], on="hospital_id", how="inner"
+    )
     tt["weighted_ratio"] = tt["ratio"] * tt["decay_weight"]
 
-    by_tract = tt.groupby("geoid").agg(
-        access_score_er=("weighted_ratio", "sum"),
-        er_count_30min=("hospital_id", "nunique"),
-    ).reset_index()
+    by_tract = (
+        tt.groupby("geoid")
+        .agg(
+            access_score_er=("weighted_ratio", "sum"),
+            er_count_30min=("hospital_id", "nunique"),
+        )
+        .reset_index()
+    )
 
-    city = tracts_df[tracts_df["in_city"]][["geoid", "population", "reachable", "snap_distance_m"]]
+    city = tracts_df[tracts_df["in_city"]][
+        ["geoid", "population", "reachable", "snap_distance_m"]
+    ]
     df = city.merge(by_tract, on="geoid", how="left")
 
     df["scored"] = df["reachable"] & (df["population"] > 0)
@@ -612,22 +784,32 @@ def _add_nearest_er_info(
     nearest = (
         travel_times.sort_values("travel_time_minutes")
         .drop_duplicates("geoid")[["geoid", "hospital_id", "travel_time_minutes"]]
-        .merge(hospitals_df[["hospital_id", "name", "in_city"]], on="hospital_id", how="left")
-        .rename(columns={
-            "travel_time_minutes": "nearest_er_minutes",
-            "name": "nearest_er_name",
-            "in_city": "nearest_er_in_city",
-        })
+        .merge(
+            hospitals_df[["hospital_id", "name", "in_city"]],
+            on="hospital_id",
+            how="left",
+        )
+        .rename(
+            columns={
+                "travel_time_minutes": "nearest_er_minutes",
+                "name": "nearest_er_name",
+                "in_city": "nearest_er_in_city",
+            }
+        )
         .drop(columns=["hospital_id"])
     )
     nearest["nearest_er_minutes"] = nearest["nearest_er_minutes"].round(1)
     df = access_df.merge(nearest, on="geoid", how="left")
 
     # Unscored tracts carry no access information
-    df.loc[~df["scored"], ["nearest_er_minutes", "nearest_er_name", "nearest_er_in_city"]] = np.nan
+    df.loc[
+        ~df["scored"], ["nearest_er_minutes", "nearest_er_name", "nearest_er_in_city"]
+    ] = np.nan
 
     across = df["scored"] & (df["nearest_er_in_city"] == False)  # noqa: E712
-    logger.info(f"{int(across.sum())} scored tracts have their nearest ER in a neighbor county")
+    logger.info(
+        f"{int(across.sum())} scored tracts have their nearest ER in a neighbor county"
+    )
     return df
 
 
