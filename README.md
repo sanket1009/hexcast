@@ -143,4 +143,4 @@ python3 scripts/run_briefings_week.py --week 2026-06-22 --mode full --confirm-fu
 
 ## Author
 
-Sanket Bhusnoor, Research Scientist, Healthy Regions & Policies Lab, University of Illinois Urbana-Champaign.
+Mallikarjun Bhusnoor
