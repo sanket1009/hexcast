@@ -31,13 +31,13 @@ Usage:
 
 from typing import Any
 
+import mlflow
 import numpy as np
 import pandas as pd
 import shap
 from scipy import stats
 from sklearn.metrics import brier_score_loss, roc_auc_score
 
-import mlflow
 from src.ml.spatial_cv import SpatialBlockCV
 from src.utils.bigquery import write_dataframe
 from src.utils.logger import get_logger

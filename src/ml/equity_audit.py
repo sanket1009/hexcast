@@ -43,6 +43,7 @@ Usage:
 
 from typing import Any
 
+import mlflow
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -50,7 +51,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-import mlflow
 from src.utils.bigquery import read_query, write_dataframe
 from src.utils.logger import get_logger
 

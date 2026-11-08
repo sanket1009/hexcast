@@ -30,6 +30,7 @@ from typing import Any
 
 import chromadb
 from chromadb.config import Settings
+
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)

@@ -116,6 +116,10 @@ ignore = [
 # 2. Third party (geopandas, xgboost, fastapi)
 # 3. Local (src.utils.config_loader)
 known-first-party = ["src", "chbindex_common"]
+# The repo has local mlflow/ and chromadb/ data folders. Without this, ruff
+# on a laptop treats those packages as first-party and CI (no such folders)
+# does not, so the two sort imports differently and CI fails.
+known-third-party = ["mlflow", "chromadb"]
 
 [tool.ruff.format]
 # Use double quotes for strings — consistent with black

@@ -32,14 +32,14 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import lightgbm as lgb
+import mlflow
+import mlflow.sklearn
+import mlflow.xgboost
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import cross_val_score
 
-import mlflow
-import mlflow.sklearn
-import mlflow.xgboost
 from src.ml.spatial_cv import SpatialBlockCV, build_spatial_groups, summarize_cv_folds
 from src.utils.bigquery import read_query, write_dataframe
 from src.utils.logger import get_logger
