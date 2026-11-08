@@ -88,7 +88,7 @@ sentence-transformers==4.1.0        # all-MiniLM-L6-v2 embedding model
 anthropic==2.3.0          # Claude API client for briefing generation
 #langchain==0.3.25          # document loading and semantic chunking
 langchain-community==0.3.25         # PDF loaders and text splitters
-pypdf==5.6.0               # PDF parsing for policy document ingestion
+pypdf==7.0.0               # PDF parsing for policy document ingestion
 jinja2==3.1.6              # prompt templating for LLM briefing assembly
 tiktoken==0.9.0            # token counting for prompt budget management
 

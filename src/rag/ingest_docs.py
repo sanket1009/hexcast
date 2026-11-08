@@ -32,10 +32,18 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Invisible characters some PDFs insert between words (zero-width no-break
-# space, zero-width space, soft hyphen). They waste chunk space and add
-# noise to embeddings.
-_INVISIBLE_CHARS = re.compile("[\ufeff\u200b\u00ad]")
+# Zero-width characters some PDFs use as the space between words (the CDPH
+# smoke guidance uses U+FEFF this way). Deleting them glued words together
+# ("Thissectionprovides..."), so they become real spaces. Soft hyphens sit
+# inside words, so those are deleted.
+_ZERO_WIDTH_SPACES = re.compile("[\ufeff\u200b]")
+_SOFT_HYPHEN = "\u00ad"
+
+# Reference lists: pages dense with citations ("et al.", URLs, "2018." or "(2018);").
+# Their chunks match topic queries well but give the model nothing to act on.
+_CITATION = re.compile(r"et al\.|doi\.org|https?://|\b(?:19|20)\d{2}[a-z]?\)?[.;]")
+REFERENCE_MIN_CITATIONS = 8
+REFERENCE_MIN_DENSITY = 0.04  # citations per word
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
@@ -129,13 +137,19 @@ def _extract_pages(pdf_path: Path) -> list[tuple[int, str]]:
     """
     reader = PdfReader(pdf_path)
     pages = []
+    skipped_refs = 0
 
     for page_num, page in enumerate(reader.pages, start=1):
-        text = page.extract_text() or ""
-        text = _INVISIBLE_CHARS.sub("", text)
-        text = re.sub(r"[ \t]+", " ", text)  # collapse gaps left behind
-        if text.strip():
-            pages.append((page_num, text))
+        text = _clean_text(page.extract_text() or "")
+        if not text.strip():
+            continue
+        if _is_reference_page(text):
+            skipped_refs += 1
+            continue
+        pages.append((page_num, text))
+
+    if skipped_refs:
+        logger.info(f"{pdf_path.name}: skipped {skipped_refs} reference-list pages")
 
     if not pages:
         logger.warning(
@@ -146,6 +160,20 @@ def _extract_pages(pdf_path: Path) -> list[tuple[int, str]]:
         logger.info(f"{pdf_path.name}: extracted {len(pages)} pages")
 
     return pages
+
+
+def _clean_text(text: str) -> str:
+    text = _ZERO_WIDTH_SPACES.sub(" ", text)
+    text = text.replace(_SOFT_HYPHEN, "")
+    return re.sub(r"[ \t]+", " ", text)  # collapse runs of spaces
+
+
+def _is_reference_page(text: str) -> bool:
+    """True for bibliography pages: many citations relative to the word count."""
+    n_citations = len(_CITATION.findall(text))
+    n_words = max(len(text.split()), 1)
+    return (n_citations >= REFERENCE_MIN_CITATIONS
+            and n_citations / n_words >= REFERENCE_MIN_DENSITY)
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
