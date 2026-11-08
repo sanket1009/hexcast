@@ -3,8 +3,6 @@ Tests for the batch runner: sample selection, retry, checkpoints, and the
 no-partial-write rule. Uses a fake generator, so no model calls.
 """
 
-import json
-from dataclasses import asdict
 from datetime import date
 
 import duckdb

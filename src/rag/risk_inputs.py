@@ -66,8 +66,10 @@ def build_tract_risks(config: dict[str, Any], week_str: str) -> list[TractRisk]:
         scores[f"{col}_pct"] = scores[col].rank(pct=True)
 
     # Rank 1 = highest burden. The prompt gets a rank, not a percentile, so the
-    # model cannot write "100th percentile" for a tract at 99.8.
-    scores["burden_rank"] = scores["burden_percentile"].rank(ascending=False, method="min").astype(int)
+    # model cannot write "100th percentile" for a tract at 99.8. Ranked on raw
+    # burden, not the percentile (rounded to 0.1), so ties only happen on
+    # identical scores; the weekly report ranks the same way.
+    scores["burden_rank"] = scores["raw_burden"].rank(ascending=False, method="min").astype(int)
     tract_count = len(scores)
 
     targets = scores[scores["burden_class"].isin(URGENCY_BY_CLASS)]
@@ -88,6 +90,7 @@ def _load_week(config: dict[str, Any], week_str: str) -> pd.DataFrame:
             s.geoid,
             s.burden_class,
             s.burden_percentile,
+            s.raw_burden,
             s.pm25_z,
             s.lst_z,
             s.access_z,

@@ -57,7 +57,9 @@ Usage:
     df = compute_2sfca(config)
 """
 
+import hashlib
 import io
+import json
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -69,7 +71,7 @@ import osmnx as ox
 import pandas as pd
 import requests
 
-from src.utils.bigquery import read_query, table_exists, write_dataframe
+from src.utils.bigquery import REPLACE_PARTITION, read_query, table_exists, write_dataframe
 from src.utils.config_loader import get_buffered_bbox
 from src.utils.logger import get_logger
 from src.utils.osm_extract import graph_from_extract
@@ -86,6 +88,14 @@ PER_RESIDENTS = 1_000
 
 # Road networks change slowly; reuse the downloaded graph across runs
 NETWORK_CACHE_DIR = Path("data") / "processed" / "road_network"
+
+# Weekly reuse: access only changes when tracts, hospitals, the road network,
+# the healthcare config, or the method change. Each run records a fingerprint
+# of those inputs; a week whose fingerprint matches an earlier week copies
+# that week's rows instead of rerunning the network analysis.
+# Bump METHOD_VERSION whenever the 2SFCA calculation itself changes.
+METHOD_VERSION = "e2sfca-gaussian-v1"
+RUNS_TABLE = "healthcare_access_runs"
 
 # Census Bureau 2020 Centers of Population by tract: where residents
 # actually live within each tract. Matches the 2020 tract boundaries used
@@ -112,6 +122,7 @@ def compute_2sfca(
     config: dict[str, Any],
     week_start: datetime | None = None,
     refresh_network: bool = False,
+    reuse: bool = True,
 ) -> pd.DataFrame:
     """
     Compute Enhanced 2SFCA emergency care access for every city tract.
@@ -124,6 +135,11 @@ def compute_2sfca(
         Week the output is stamped with. Defaults to most recent Monday.
     refresh_network : bool
         Re-download the road network instead of using the cached GraphML.
+        Implies reuse=False.
+    reuse : bool
+        Copy an earlier week's rows when the inputs are unchanged (see
+        METHOD_VERSION). A 52-week backfill then runs the network analysis
+        once instead of 52 times.
 
     Returns
     -------
@@ -149,6 +165,17 @@ def compute_2sfca(
 
     # Step 2 — Supply: ED hospitals in the city and buffer
     hospitals_df = _load_hospital_data(config)
+
+    # Same inputs as an earlier week: copy its result, skip the network work
+    fingerprint = _inputs_fingerprint(tracts_df, hospitals_df, config)
+    if reuse and not refresh_network:
+        reused = _reuse_previous_week(config, fingerprint, week_start)
+        if reused is not None:
+            access_df, source_week = reused
+            _validate_output(access_df, catchment_minutes)
+            write_dataframe(access_df, "healthcare_access", config, write_disposition=REPLACE_PARTITION)
+            _record_run(config, week_start, fingerprint, source_week)
+            return access_df
 
     # Step 3 — Road network for the buffered bbox (cached)
     G = _get_road_network(config, refresh=refresh_network)
@@ -205,9 +232,82 @@ def compute_2sfca(
     access_df["city_fips"] = config["full_fips"]
 
     _validate_output(access_df, catchment_minutes)
-    write_dataframe(access_df, "healthcare_access", config)
+    write_dataframe(access_df, "healthcare_access", config, write_disposition=REPLACE_PARTITION)
+    _record_run(config, week_start, fingerprint, source_week=None)
 
     return access_df
+
+
+# ---------------------------------------------------------------------------
+# Reuse across weeks
+# ---------------------------------------------------------------------------
+
+def _inputs_fingerprint(tracts_df: pd.DataFrame, hospitals_df: pd.DataFrame, config: dict[str, Any]) -> str:
+    """
+    Short hash of everything the access result depends on: tract locations
+    and population, hospital locations and beds, the healthcare config, the
+    cached road network file, and METHOD_VERSION.
+    """
+    h = hashlib.sha256(METHOD_VERSION.encode())
+    tracts = tracts_df[["geoid", "centroid_lat", "centroid_lon", "population", "in_city"]].sort_values("geoid")
+    hospitals = hospitals_df[["hospital_id", "beds", "latitude", "longitude"]].sort_values("hospital_id")
+    for frame in (tracts, hospitals):
+        h.update(pd.util.hash_pandas_object(frame.round(6), index=False).values.tobytes())
+    h.update(json.dumps(config["healthcare"], sort_keys=True, default=str).encode())
+    for graph in sorted(NETWORK_CACHE_DIR.glob(f"{config['full_fips']}_*.graphml")):
+        h.update(f"{graph.name}:{graph.stat().st_size}".encode())
+    return h.hexdigest()[:16]
+
+
+def _reuse_previous_week(
+    config: dict[str, Any],
+    fingerprint: str,
+    week_start: datetime,
+) -> tuple[pd.DataFrame, str] | None:
+    """The latest other week computed from the same inputs, restamped for this week."""
+    if not table_exists(RUNS_TABLE, config):
+        return None
+    fips, week = config["full_fips"], week_start.strftime("%Y-%m-%d")
+    runs = read_query(
+        f"""
+        SELECT week_start_date FROM {{dataset}}.{RUNS_TABLE}
+        WHERE city_fips = '{fips}' AND inputs_hash = '{fingerprint}'
+          AND week_start_date != '{week}' AND computed_from IS NULL
+        ORDER BY week_start_date DESC LIMIT 1
+        """,
+        config,
+    )
+    if runs.empty:
+        return None
+    source = pd.Timestamp(runs["week_start_date"].iloc[0]).strftime("%Y-%m-%d")
+    df = read_query(
+        f"""
+        SELECT * FROM {{dataset}}.healthcare_access
+        WHERE city_fips = '{fips}' AND week_start_date = '{source}'
+        """,
+        config,
+    )
+    if df.empty:
+        return None
+    df["week_start_date"] = week_start.date()
+    logger.info(f"Inputs unchanged since week {source}; reusing its access scores for {week}")
+    return df, source
+
+
+def _record_run(config: dict[str, Any], week_start: datetime, fingerprint: str, source_week: str | None) -> None:
+    """One row per week: which inputs produced it, and the week it was copied from (if any)."""
+    write_dataframe(
+        pd.DataFrame({
+            "week_start_date": [week_start.date()],
+            "city_fips": [config["full_fips"]],
+            "inputs_hash": [fingerprint],
+            "computed_from": [source_week],
+            "recorded_at": [datetime.now()],
+        }),
+        RUNS_TABLE,
+        config,
+        write_disposition=REPLACE_PARTITION,
+    )
 
 
 # ---------------------------------------------------------------------------

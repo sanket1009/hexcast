@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -120,18 +120,27 @@ class HealthcareConfig(BaseModel):
     snap_max_m: float = 2000.0
 
 
-class BurdenThresholdsConfig(BaseModel):
-    """Compound burden score thresholds for risk classification."""
+class BurdenPercentilesConfig(BaseModel):
+    """
+    City percentile cutoffs (0-100) for burden classes, used by compound_score.py.
+    A tract at or above a cutoff gets that class.
+    """
+    elevated: float
     high_risk: float
     critical: float
 
-    @field_validator("high_risk", "critical")
+    @field_validator("elevated", "high_risk", "critical")
     @classmethod
-    def valid_threshold(cls, v: float) -> float:
-        """Thresholds must be between 0 and 1."""
-        if not 0 <= v <= 1:
-            raise ValueError(f"Threshold {v} must be between 0.0 and 1.0")
+    def valid_percentile(cls, v: float) -> float:
+        if not 0 < v < 100:
+            raise ValueError(f"Percentile {v} must be between 0 and 100")
         return v
+
+    @model_validator(mode="after")
+    def increasing(self) -> "BurdenPercentilesConfig":
+        if not self.elevated < self.high_risk < self.critical:
+            raise ValueError("Cutoffs must increase: elevated < high_risk < critical")
+        return self
 
 
 class ScheduleConfig(BaseModel):
@@ -139,6 +148,18 @@ class ScheduleConfig(BaseModel):
     cron: str
     start_date: str
     catchup: bool
+
+
+class ReportingLayer(BaseModel):
+    """One level of reporting geography, read from an ArcGIS REST layer."""
+    url: str
+    name_field: str
+    id_field: str | None = None
+
+
+class AlertsConfig(BaseModel):
+    """Weekly critical-tract email. Recipients come from ALERT_EMAIL_TO, not config."""
+    top_n: int = 5  # communities shown per change type in the email body; all are in the CSV
 
 
 class GcpConfig(BaseModel):
@@ -182,7 +203,7 @@ class CityConfig(BaseModel):
     healthcare: HealthcareConfig
 
     # Thresholds
-    burden_thresholds: BurdenThresholdsConfig
+    burden_percentiles: BurdenPercentilesConfig
     hotspot_significance: dict[str, float]
 
     # Airflow
@@ -190,6 +211,13 @@ class CityConfig(BaseModel):
 
     # GCP
     gcp: GcpConfig
+
+    # Alerts
+    alerts: AlertsConfig = AlertsConfig()
+
+    # Reporting geography for the weekly report: level -> layer
+    # (e.g. region = SPA, district = Health District, community = CSA)
+    reporting_areas: dict[str, ReportingLayer] = {}
 
     # RAG
     policy_docs_dir: str
@@ -346,6 +374,7 @@ def _load_secrets() -> dict[str, str]:
         "EPA_AQS_KEY": "EPA AQS API key (PM2.5 ingestion)",
         "CDC_SOCRATA_APP_TOKEN": "Optional CDC PLACES app token (raises rate limit)",
         "GEE_PROJECT_ID": "Cloud project registered for Earth Engine",
+        "ALERT_EMAIL_TO": "Comma-separated recipients of the weekly critical-tract email",
     }
 
     for key, description in required_secrets.items():
@@ -419,10 +448,10 @@ def get_gcs_bucket(config: dict[str, Any]) -> str:
 
 
 def get_high_risk_threshold(config: dict[str, Any]) -> float:
-    """Return the compound burden score threshold for high-risk classification."""
-    return config["burden_thresholds"]["high_risk"]
+    """City percentile (0-100) at or above which a tract is HIGH."""
+    return config["burden_percentiles"]["high_risk"]
 
 
 def get_critical_threshold(config: dict[str, Any]) -> float:
-    """Return the compound burden score threshold for critical classification."""
-    return config["burden_thresholds"]["critical"]
+    """City percentile (0-100) at or above which a tract is CRITICAL."""
+    return config["burden_percentiles"]["critical"]

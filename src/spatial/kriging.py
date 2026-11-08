@@ -51,7 +51,7 @@ from pykrige.ok import OrdinaryKriging
 from scipy.optimize import OptimizeWarning, curve_fit
 from scipy.spatial.distance import pdist
 
-from src.utils.bigquery import read_query, write_dataframe
+from src.utils.bigquery import REPLACE_PARTITION, read_query, write_dataframe
 from src.utils.gcs import upload_bytes
 from src.utils.logger import get_logger
 
@@ -185,7 +185,7 @@ def run_kriging(
     _validate_output(result_df, len(tracts_df))
 
     # Step 10 — Write to BigQuery
-    write_dataframe(result_df, "pm25_kriged", config)
+    write_dataframe(result_df, "pm25_kriged", config, write_disposition=REPLACE_PARTITION)
 
     logger.info(
         f"Kriging complete: {len(result_df):,} tracts, "

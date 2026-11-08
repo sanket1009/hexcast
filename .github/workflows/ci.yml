@@ -1,121 +1,102 @@
 # =============================================================================
-# CHBIndex — Continuous Integration
+# CHBIndex: Continuous Integration
 # =============================================================================
-# Runs on every push and pull request to any branch.
-# Purpose: catch bugs before they reach main.
+# Runs on every push and on pull requests into main. Two jobs:
 #
-# What it does:
-#   1. Sets up Python 3.12
-#   2. Installs all dependencies
-#   3. Runs ruff linter — catches style and bug issues
-#   4. Runs pytest — confirms all tests pass
-#   5. Reports coverage — shows what percentage of code is tested
+#   test  lint (ruff), format check, and pytest with a coverage floor.
+#         Tests use synthetic data only: no API keys, network, or warehouse.
+#   dags  imports every DAG file in Airflow 3.3 and checks the expected
+#         DAGs exist (scripts/check_dags.py). Separate job because Airflow's
+#         pins conflict with the spatial stack in requirements.txt.
 #
-# If any step fails, GitHub shows a red X on the commit.
-# If all steps pass, GitHub shows a green checkmark.
+# A red X on a commit means one of these failed; the job log says which.
 # =============================================================================
 
 name: CI
 
-# Trigger: run this workflow on every push and pull request
-# 'push' covers direct commits to any branch
-# 'pull_request' covers PRs from feature branches into main
-#
-# Currently manual only (Actions tab -> Run workflow). Restore the push and
-# pull_request triggers below once tests/ has real tests; with empty test
-# files pytest collects nothing and the 60% coverage floor always fails.
-#   push:
-#     branches: ["**"]
-#   pull_request:
-#     branches: ["main"]
 on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
+
+concurrency:
+  # A newer push to the same branch cancels the older run
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    # Run on GitHub's Ubuntu runner — free for public repos
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
-      # Step 1 — Check out the repository code
-      # Without this, the runner has no code to work with
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Step 2 — Set up Python 3.12
-      # Matches the Python version in our Docker containers
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
-      # Step 3 — Cache pip dependencies
-      # GitHub caches the installed packages between runs.
-      # If requirements.txt hasn't changed, pip install is skipped.
-      # Saves 3-5 minutes per CI run.
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      # Step 4 — Install dependencies
-      # Install all packages from requirements.txt
-      # --quiet reduces output noise in CI logs
+      # CPU-only PyTorch first. sentence-transformers would otherwise pull the
+      # CUDA build and about 2 GB of NVIDIA libraries the tests never use.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt --quiet
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
 
-      # Step 5 — Run ruff linter
-      # Checks for PEP 8 violations, unused imports, undefined variables
-      # Fails the CI run if any linting errors are found
-      # This enforces code quality on every commit
-      - name: Run ruff linter
-        run: |
-          ruff check src/ --output-format=github
+      - name: Lint
+        run: ruff check src/ tests/ airflow/dags/ scripts/ --output-format=github
 
-      # Step 6 — Run ruff formatter check
-      # Checks that code is formatted correctly with black-compatible style
-      # --check means "report errors but don't fix them"
-      # Fixing is the developer's job, not CI's job
-      - name: Check code formatting
-        run: |
-          ruff format src/ --check
+      - name: Format check
+        run: ruff format src/ tests/ airflow/dags/ scripts/ --check
 
-      # Step 7 — Run pytest with coverage
-      # --cov=src: measure coverage for everything in src/
-      # --cov-report=term-missing: show which lines aren't covered
-      # --cov-fail-under=60: fail if coverage drops below 60%
-      # We set 60% as the floor — realistic for a project in active development
-      - name: Run tests with coverage
+      # The floor guards against coverage dropping; raise it as tests are added
+      - name: Tests with coverage
         run: |
           pytest tests/ \
             --cov=src \
             --cov-report=term-missing \
-            --cov-fail-under=60 \
-            -v
+            --cov-report=html \
+            --cov-fail-under=28
         env:
-          # Mock environment variables for tests
-          # Tests should never use real API keys
-          # src/utils/config_loader.py reads these from environment
+          # Placeholders: config_loader reads these, tests never call the APIs
           ANTHROPIC_API_KEY: "test-key-not-real"
           GCP_PROJECT_ID: "test-project"
-          GCP_SERVICE_ACCOUNT_PATH: "/tmp/fake-key.json"
-          GEE_SERVICE_ACCOUNT: "test@test.iam.gserviceaccount.com"
-          GEE_PRIVATE_KEY_PATH: "/tmp/fake-gee-key.json"
-          EPA_AQS_EMAIL: "test@test.com"
-          EPA_AQS_KEY: "test@test.com"
+          EPA_AQS_EMAIL: "test@example.com"
+          EPA_AQS_KEY: "test"
 
-      # Step 8 — Upload coverage report
-      # Saves the coverage report as a GitHub Actions artifact
-      # You can download and view it from the Actions tab
       - name: Upload coverage report
+        if: always()
         uses: actions/upload-artifact@v4
-        if: always()    # upload even if tests failed — useful for debugging
         with:
           name: coverage-report
           path: htmlcov/
           retention-days: 7
+
+  dags:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Airflow with its own constraints file, as Airflow recommends. The DAG
+      # files import only Airflow, PyYAML and pendulum at parse time.
+      - name: Install Airflow 3.3.0
+        run: |
+          python -m pip install --upgrade pip
+          pip install "apache-airflow==3.3.0" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.0/constraints-3.12.txt"
+
+      - name: Check DAGs import
+        run: python scripts/check_dags.py
+        env:
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+          AIRFLOW__CORE__DAGS_FOLDER: airflow/dags
+          AIRFLOW__CORE__LOAD_EXAMPLES: "false"

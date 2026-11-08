@@ -115,7 +115,7 @@ ignore = [
 # 1. Standard library (os, sys, pathlib)
 # 2. Third party (geopandas, xgboost, fastapi)
 # 3. Local (src.utils.config_loader)
-known-first-party = ["src"]
+known-first-party = ["src", "chbindex_common"]
 
 [tool.ruff.format]
 # Use double quotes for strings — consistent with black

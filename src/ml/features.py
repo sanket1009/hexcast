@@ -64,7 +64,7 @@ TEMPORAL_LAG_WEEKS = [1, 2, 4]
 
 # Target variable definition
 # A tract is "high risk" if compound score >= this threshold
-# Must match burden_thresholds.high_risk in pipeline.yaml
+# Must match burden_percentiles.high_risk in the city config
 HIGH_RISK_THRESHOLD = 0.75
 
 
@@ -100,7 +100,6 @@ def engineer_features(
             hour=0, minute=0, second=0, microsecond=0
         )
 
-    full_fips = config["full_fips"]
     week_str = week_start.strftime("%Y-%m-%d")
 
     logger.info(

@@ -148,11 +148,11 @@ def pull_lst_raster(
     # Keeping it local prevents auth errors on modules that don't need GEE
     try:
         import ee
-    except ImportError:
+    except ImportError as err:
         raise ImportError(
             "earthengine-api is not installed. "
             "Run: pip install earthengine-api"
-        )
+        ) from err
 
     # Determine week
     if week_start is None:
@@ -271,7 +271,7 @@ def _authenticate_gee(config: dict[str, Any]) -> None:
         raise RuntimeError(
             f"GEE authentication failed: {e}\n"
             f"Run 'earthengine authenticate' in terminal to set up credentials."
-        )
+        ) from e
 
 
 def _build_lst_composite(

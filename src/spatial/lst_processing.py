@@ -37,7 +37,7 @@ import pandas as pd
 import rasterio
 import rasterstats
 
-from src.utils.bigquery import read_query, write_dataframe
+from src.utils.bigquery import REPLACE_PARTITION, read_query, write_dataframe
 from src.utils.gcs import download_file
 from src.utils.logger import get_logger
 
@@ -115,7 +115,7 @@ def process_lst_raster(
 
     # Step 7 — Validate and write to BigQuery
     _validate_output(zonal_df)
-    write_dataframe(zonal_df, "lst_tract_stats", config)
+    write_dataframe(zonal_df, "lst_tract_stats", config, write_disposition=REPLACE_PARTITION)
 
     # Step 8 — Clean up local raster file
     # GeoTIFFs are large — don't keep them on disk after processing

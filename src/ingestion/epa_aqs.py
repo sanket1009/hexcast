@@ -26,8 +26,9 @@ Output:
     where the monitor physically sits.
 
 Usage:
-    from src.ingestion.epa_aqs import pull_pm25_readings
-    df = pull_pm25_readings(config)
+    from src.ingestion.epa_aqs import pull_pm25_readings, pull_pm25_range
+    df = pull_pm25_readings(config)                         # one week
+    summary = pull_pm25_range(config, first_week, last_week)  # backfill, 1 request per county-year
 """
 
 import time
@@ -39,7 +40,7 @@ import pandas as pd
 import requests
 from shapely.geometry import box
 
-from src.utils.bigquery import write_dataframe
+from src.utils.bigquery import REPLACE_PARTITION, write_dataframe
 from src.utils.config_loader import get_bbox_tuple
 from src.utils.logger import get_logger
 
@@ -134,39 +135,123 @@ def pull_pm25_readings(
     mean     12.847...
     ...
     """
-    city = config["city_name"]
+    # Default: the 7 days of the most recent complete week
+    if week_start is None:
+        week_start = _get_most_recent_monday()
+    week_end = week_start + timedelta(days=6)
+
+    logger.info(
+        f"Pulling PM2.5 readings for {config['city_name']} "
+        f"({week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')})"
+    )
+
+    daily_df = _fetch_all_counties(config, week_start, week_end)
+    if daily_df.empty:
+        raise ValueError(
+            f"No PM2.5 readings returned for {config['city_name']} "
+            f"week of {week_start.strftime('%Y-%m-%d')}. "
+            f"AQS holds quality-assured data that agencies submit with a lag "
+            f"of roughly two months, so recent weeks are often empty. "
+            f"Pass week_start= for an earlier week."
+        )
+
+    weekly_df = _summarize_week(daily_df, week_start, config)
+
+    # Replace this week and city, so retries and reruns never duplicate rows
+    write_dataframe(weekly_df, "epa_pm25_raw", config, write_disposition=REPLACE_PARTITION)
+
+    logger.info(
+        f"EPA AQS ingestion complete: {len(weekly_df)} monitors, "
+        f"{weekly_df['above_annual_standard'].sum()} above annual standard"
+    )
+
+    return weekly_df
+
+
+def pull_pm25_range(
+    config: dict[str, Any],
+    first_week: datetime,
+    last_week: datetime,
+) -> dict[str, Any]:
+    """
+    Pull PM2.5 for many weeks with one AQS request per county per calendar year.
+
+    A weekly pull costs one request per county per week (52 weeks x 6
+    counties = 312). AQS lets one request cover a whole calendar year, so a
+    backfill fetches each year once, slices the daily readings into weeks,
+    and runs every week through the same summary and checks as
+    pull_pm25_readings. All weeks are written in one REPLACE_PARTITION
+    write, which replaces each week separately.
+
+    Parameters
+    ----------
+    first_week, last_week : datetime
+        Mondays of the first and last week to load (inclusive).
+
+    Returns
+    -------
+    dict
+        weeks_written: list of 'YYYY-MM-DD' Mondays written
+        weeks_missing: Mondays with no usable city readings (skipped, not errors)
+        rows: total monitor-week rows written
+    """
+    if last_week < first_week:
+        raise ValueError("last_week is before first_week")
+    mondays = []
+    week = first_week
+    while week <= last_week:
+        mondays.append(week)
+        week += timedelta(weeks=1)
+
+    span_end = last_week + timedelta(days=6)
+    logger.info(
+        f"Backfilling PM2.5 for {config['city_name']}: {len(mondays)} weeks, "
+        f"{first_week:%Y-%m-%d} to {span_end:%Y-%m-%d}"
+    )
+    daily_df = _fetch_all_counties(config, first_week, span_end)
+
+    frames, written, missing = [], [], []
+    for monday in mondays:
+        in_week = (
+            daily_df[(daily_df["date"] >= monday) & (daily_df["date"] < monday + timedelta(days=7))]
+            if not daily_df.empty else daily_df
+        )
+        try:
+            frames.append(_summarize_week(in_week, monday, config))
+            written.append(f"{monday:%Y-%m-%d}")
+        except ValueError as err:
+            logger.warning(f"Week {monday:%Y-%m-%d} skipped: {err}")
+            missing.append(f"{monday:%Y-%m-%d}")
+
+    if frames:
+        all_weeks = pd.concat(frames, ignore_index=True)
+        write_dataframe(all_weeks, "epa_pm25_raw", config, write_disposition=REPLACE_PARTITION)
+    rows = sum(len(f) for f in frames)
+    logger.info(f"PM2.5 backfill: {len(written)} weeks written ({rows:,} rows), {len(missing)} missing")
+    return {"weeks_written": written, "weeks_missing": missing, "rows": rows}
+
+
+def _fetch_all_counties(
+    config: dict[str, Any],
+    start: datetime,
+    end: datetime,
+) -> pd.DataFrame:
+    """
+    Daily readings for the city county and its neighbors over [start, end].
+
+    AQS requires bdate and edate in the same calendar year, so the span is
+    split at each New Year: one request per county per calendar year.
+    """
     aqs_cfg = config["epa_aqs"]
     full_fips = config["full_fips"]
-
-    # The city county first, then neighbors as (state, county) pairs
     counties = [(aqs_cfg["state_code"], aqs_cfg["county_code"])] + [
         (fips[:2], fips[2:]) for fips in config.get("neighbor_counties", [])
     ]
 
-    # Determine the week to pull
-    # Default: the 7 days of the most recent complete week
-    if week_start is None:
-        week_start = _get_most_recent_monday()
-
-    week_end = week_start + timedelta(days=6)
-
-    logger.info(
-        f"Pulling PM2.5 readings for {city} "
-        f"({week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')})"
-    )
-
-    # Step 1 — Pull daily readings from EPA AQS API
-    # AQS requires bdate and edate in the same calendar year, so a week
-    # that spans New Year is fetched in two requests
-    ranges = [(week_start, week_end)]
-    if week_start.year != week_end.year:
-        year_end = datetime(week_start.year, 12, 31)
-        ranges = [(week_start, year_end), (year_end + timedelta(days=1), week_end)]
-
     parts = []
     for state_code, county_code in counties:
         is_city = state_code + county_code == full_fips
-        for b, e in ranges:
+        for b, e in _year_ranges(start, end):
             try:
                 parts.append(_fetch_daily_readings(
                     state_code=state_code,
@@ -180,54 +265,55 @@ def pull_pm25_readings(
                 # thins out Kriging support, so log it and carry on
                 if is_city:
                     raise
-                logger.warning(
-                    f"Skipping neighbor county {state_code}{county_code}: {err}"
-                )
-    daily_df = pd.concat([d for d in parts if not d.empty], ignore_index=True) if any(
-        not d.empty for d in parts
-    ) else pd.DataFrame()
+                logger.warning(f"Skipping neighbor county {state_code}{county_code}: {err}")
 
-    if daily_df.empty:
-        raise ValueError(
-            f"No PM2.5 readings returned for {city} "
-            f"week of {week_start.strftime('%Y-%m-%d')}. "
-            f"AQS holds quality-assured data that agencies submit with a lag "
-            f"of roughly two months, so recent weeks are often empty. "
-            f"Pass week_start= for an earlier week."
-        )
-
+    parts = [d for d in parts if not d.empty]
+    if not parts:
+        return pd.DataFrame()
+    daily_df = pd.concat(parts, ignore_index=True)
     logger.info(
         f"Retrieved {len(daily_df):,} daily readings "
         f"from {daily_df['monitor_id'].nunique()} monitors"
     )
+    return daily_df
 
-    # Step 2 — Aggregate daily readings to weekly summary per monitor
-    weekly_df = _aggregate_to_weekly(daily_df, week_start, full_fips)
 
-    # Step 2b — Drop neighbor monitors outside the buffer around the city
+def _year_ranges(start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+    """Split [start, end] into pieces that each stay inside one calendar year."""
+    ranges = []
+    b = start
+    while b <= end:
+        e = min(end, datetime(b.year, 12, 31))
+        ranges.append((b, e))
+        b = e + timedelta(days=1)
+    return ranges
+
+
+def _summarize_week(
+    daily_df: pd.DataFrame,
+    week_start: datetime,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    """Daily readings for one week -> one checked row per monitor. Raises ValueError if unusable."""
+    if daily_df.empty:
+        raise ValueError(f"no readings for week of {week_start:%Y-%m-%d}")
+
+    # Aggregate daily readings to a weekly summary per monitor
+    weekly_df = _aggregate_to_weekly(daily_df, week_start, config["full_fips"])
+
+    # Drop neighbor monitors outside the buffer around the city
     weekly_df = _filter_to_buffer(weekly_df, config)
 
     city_rows = weekly_df[weekly_df["in_city"]]
     logger.info(
-        f"Aggregated to {len(weekly_df)} monitor weekly summaries "
+        f"Week {week_start:%Y-%m-%d}: {len(weekly_df)} monitor summaries "
         f"({len(city_rows)} in city, {len(weekly_df) - len(city_rows)} neighbor). "
         f"City mean PM2.5: {city_rows['pm25_mean'].mean():.2f} μg/m³"
     )
 
-    # Step 3 — Flag readings above EPA standards
+    # Flag readings above EPA standards, then check before writing
     weekly_df = _flag_exceedances(weekly_df)
-
-    # Step 4 — Validate output
     _validate_output(weekly_df, config)
-
-    # Step 5 — Write to BigQuery
-    write_dataframe(weekly_df, "epa_pm25_raw", config)
-
-    logger.info(
-        f"EPA AQS ingestion complete: {len(weekly_df)} monitors, "
-        f"{weekly_df['above_annual_standard'].sum()} above annual standard"
-    )
-
     return weekly_df
 
 
