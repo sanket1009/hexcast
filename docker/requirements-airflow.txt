@@ -24,7 +24,7 @@ networkx==3.5
 h3==4.5.0
 pykrige==1.7.3
 rasterstats==0.20.0
-rasterio==1.4.3
+rasterio==1.4.4
 xarray==2026.7.0
 rioxarray==0.23.0
 scipy==1.18.1

@@ -19,10 +19,8 @@
 
 x-airflow-common:
   &airflow-common
+  # Built once, by airflow-init below; every Airflow service runs this image
   image: chbindex-airflow:3.3.0
-  build:
-    context: ..
-    dockerfile: docker/Dockerfile.airflow
 
   # Project secrets (ANTHROPIC_API_KEY, EPA_AQS_KEY, ALERT_EMAIL_TO,
   # AIRFLOW_CONN_SMTP_DEFAULT, ...). Never hardcoded here.
@@ -197,6 +195,11 @@ services:
   # The image entrypoint does both when these _AIRFLOW_* variables are set.
   airflow-init:
     <<: *airflow-common
+    # Only this service builds the image. With build: in the shared block,
+    # compose built it once per service in parallel and the tags collided.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.airflow
     command: version
     environment:
       <<: *airflow-common-env

@@ -14,19 +14,31 @@ FROM apache/airflow:3.3.0-python3.12
 
 # Compilers for any package without a wheel for this platform. GDAL, GEOS and
 # PROJ ship inside the rasterio, pyogrio, shapely and pyproj wheels.
+# libgdal-dev is for fiona (pulled in by rasterstats): fiona has no Linux
+# arm64 wheel, so on Apple Silicon it builds from source against system GDAL.
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc g++ git \
+    && apt-get install -y --no-install-recommends gcc g++ git libgdal-dev \
     && rm -rf /var/lib/apt/lists/*
+ENV GDAL_CONFIG=/usr/bin/gdal-config
 
 USER airflow
-COPY docker/requirements-airflow.txt /requirements-airflow.txt
+# --chmod so the airflow user can read it whatever the file mode on the host
+COPY --chmod=644 docker/requirements-airflow.txt /requirements-airflow.txt
 
 # Pin apache-airflow to the image's version instead of using Airflow's
 # constraints file. The constraints pin numpy 1.26 and pandas 2.1, which the
 # spatial stack cannot use; pinning Airflow itself keeps it from being
 # upgraded or downgraded while pip resolves the rest. Checked with
-# `uv pip compile` for linux x86_64 and aarch64 (Apple Silicon).
+# `uv pip compile` for linux x86_64 and aarch64 (Apple Silicon), and every
+# compiled package, including dependencies, was checked for a cp312 aarch64
+# wheel: rasterio 1.4.3 has none (pinned to 1.4.4); fiona has none (built from
+# source, see libgdal-dev above).
+#
+# CPU-only PyTorch first (same as CI). sentence-transformers would otherwise
+# pull the CUDA build and several GB of NVIDIA libraries no task uses.
+RUN pip install --no-cache-dir torch==2.15.0 \
+    --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir \
     "apache-airflow==${AIRFLOW_VERSION}" \
     -r /requirements-airflow.txt

@@ -135,6 +135,10 @@ indent-style = "space"
 # Where to find tests
 testpaths = ["tests"]
 
+# Put the repo root on sys.path so tests can import src.* however pytest is
+# launched (plain `pytest` in CI, `python -m pytest` locally)
+pythonpath = ["."]
+
 # Default options applied to every pytest run
 # -v: verbose output — shows each test name and result
 # --tb=short: short traceback on failure — easier to read than full traceback
