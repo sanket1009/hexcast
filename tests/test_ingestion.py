@@ -55,6 +55,7 @@ def test_share_ignores_parts_no_area_covers():
 from datetime import datetime, timedelta  # noqa: E402
 
 import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 from src.ingestion import epa_aqs  # noqa: E402
 
@@ -141,3 +142,35 @@ def test_backfill_reports_weeks_without_city_readings(monkeypatch):
     )
     assert result["weeks_missing"] == ["2026-01-05"]
     assert result["weeks_written"] == ["2026-01-12"]
+
+
+def _weekly(means, in_city=None):
+    n = len(means)
+    return pd.DataFrame(
+        {
+            "monitor_id": [f"m{i}" for i in range(n)],
+            "pm25_mean": means,
+            "in_city": in_city if in_city is not None else [True] * n,
+        }
+    )
+
+
+def test_one_faulty_monitor_is_dropped_and_the_week_kept():
+    # Week of 2026-01-12: 2 of 21 monitors reported a negative weekly mean
+    df = _weekly([9.0, -0.4, 11.2, 8.7, 10.1, 7.9, 12.3, 9.5])
+    out = epa_aqs._drop_invalid_monitors(df, datetime(2026, 1, 12))
+    assert len(out) == 7
+    assert "m1" not in set(out["monitor_id"])
+    assert (out["pm25_mean"] >= 0).all()
+
+
+def test_too_many_invalid_monitors_still_rejects_the_week():
+    df = _weekly([9.0, -0.4, -1.2, 640.0, 10.1, 7.9, 12.3, 9.5])  # 3 of 8
+    with pytest.raises(ValueError, match="3 of 8 monitors"):
+        epa_aqs._drop_invalid_monitors(df, datetime(2026, 1, 12))
+
+
+def test_clean_week_is_unchanged():
+    df = _weekly([9.0, 11.2, 8.7])
+    out = epa_aqs._drop_invalid_monitors(df, datetime(2026, 1, 12))
+    pd.testing.assert_frame_equal(out, df)
