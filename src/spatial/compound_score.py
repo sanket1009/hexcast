@@ -179,6 +179,7 @@ def _load_signals(config: dict[str, Any], week_str: str) -> pd.DataFrame:
         LEFT JOIN
             {{dataset}}.healthcare_access a
             ON k.geoid = a.geoid
+            AND a.week_start_date = '{week_str}'
         WHERE
             k.week_start_date = '{week_str}'
             AND k.city_fips = '{full_fips}'
@@ -302,17 +303,24 @@ def _validate_output(df: pd.DataFrame, signals_df: pd.DataFrame) -> None:
     if invalid:
         raise ValueError(f"Invalid burden classes: {invalid}")
 
-    # Direction check: a higher score must mean less access. This is the
-    # check that would have caught the PCA sign problem.
-    rho = df["compound_score"].corr(signals_df["access_score_er"], method="spearman")
-    if rho >= 0:
+    # Direction check: better access must lower burden. This is the check
+    # that would have caught the PCA sign problem (access rho +0.86). It tests
+    # the access component itself, not the total score: in LA the best-served
+    # tracts are also the hottest and most polluted, so in some weeks total
+    # burden is uncorrelated with access even though access enters negatively
+    # (week of 2025-10-27: total rho +0.007).
+    rho = df["access_z"].corr(signals_df["access_score_er"], method="spearman")
+    if not rho <= -0.5:
         raise ValueError(
-            f"Burden rises with access (Spearman rho = {rho:.3f}). "
-            f"Check the access sign in SIGNED_SIGNALS."
+            f"Access component does not fall as access rises (Spearman rho = "
+            f"{rho:.3f}). Check the access sign in SIGNED_SIGNALS."
         )
+    total_rho = df["compound_score"].corr(
+        signals_df["access_score_er"], method="spearman"
+    )
 
     logger.info(
         f"Compound score validation passed: {len(df):,} tracts, "
         f"mean={df['compound_score'].mean():.3f}, "
-        f"access rho={rho:.3f}"
+        f"access component rho={rho:.3f}, total burden vs access rho={total_rho:.3f}"
     )

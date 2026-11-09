@@ -124,17 +124,45 @@ def test_missing_signals_are_filled_with_the_city_median():
     )
 
 
-def test_validation_fails_if_burden_rises_with_access():
+def test_validation_fails_if_the_access_sign_is_flipped():
     signals = _signals()
     scores = compound_score._build_composite(signals, PERCENTILES)
     compound_score._validate_output(scores, signals)  # correct direction passes
 
     flipped = scores.copy()
-    flipped["compound_score"] = (
-        signals["access_score_er"].rank(pct=True).values
-    )  # burden up with access
-    with pytest.raises(ValueError, match="rises with access"):
+    flipped["access_z"] = -flipped["access_z"]  # access entering positively
+    with pytest.raises(ValueError, match="does not fall as access rises"):
         compound_score._validate_output(flipped, signals)
+
+
+def test_validation_passes_when_exposure_overlaps_good_access():
+    # LA fall and winter weeks: the best-served tracts are also the hottest and
+    # most polluted, so total burden barely tracks access (week of 2025-10-27:
+    # rho +0.007). The access sign is still right, so validation must pass.
+    signals = _signals()
+    rank = signals["access_score_er"].rank(pct=True)
+    signals["pm25_kriged"] = 9 + 3 * rank
+    signals["lst_zscore"] = 3 * rank
+    scores = compound_score._build_composite(signals, PERCENTILES)
+    total = scores["compound_score"].corr(signals["access_score_er"], method="spearman")
+    assert total > -0.5  # total burden does not fall clearly with access
+    compound_score._validate_output(scores, signals)
+
+
+def test_signals_join_healthcare_access_for_the_same_week(monkeypatch):
+    # Without the week filter every stored week of access matched each tract,
+    # tripling the rows once a second week existed.
+    queries = []
+
+    def read_query(query, config):
+        queries.append(query)
+        return _signals(5)
+
+    monkeypatch.setattr(compound_score, "read_query", read_query)
+    compound_score._load_signals({"full_fips": "06037"}, "2025-08-04")
+    joined = " ".join(queries[0].split())
+    assert "a.week_start_date = '2025-08-04'" in joined
+    assert "l.week_start_date = '2025-08-04'" in joined
 
 
 # ---------------------------------------------------------------------------
@@ -318,3 +346,24 @@ def test_unchanged_inputs_reuse_last_week_without_the_road_network(
     runs = written["healthcare_access_runs"]
     assert runs["computed_from"].iloc[0] == "2026-06-15"
     assert runs["inputs_hash"].iloc[0] == fingerprint
+
+
+def test_runs_record_stores_computed_from_as_text_even_when_empty(monkeypatch):
+    # The first recorded week is computed, not copied (computed_from None).
+    # DuckDB typed that all-None column INTEGER, so copied weeks could not
+    # store their source date. The column must be text from the first row.
+    import duckdb
+
+    written = {}
+    monkeypatch.setattr(
+        healthcare_access,
+        "write_dataframe",
+        lambda df, table, c, **kw: written.setdefault(table, df),
+    )
+    healthcare_access._record_run(HC_CONFIG, datetime(2026, 6, 22), "abc123", None)
+    # duckdb reads the local variable `runs` by name
+    runs = written["healthcare_access_runs"]  # noqa: F841
+    types = {
+        row[0]: row[1] for row in duckdb.sql("DESCRIBE SELECT * FROM runs").fetchall()
+    }
+    assert types["computed_from"] == "VARCHAR"

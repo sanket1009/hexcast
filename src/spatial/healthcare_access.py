@@ -330,7 +330,9 @@ def _record_run(
                 "week_start_date": [week_start.date()],
                 "city_fips": [config["full_fips"]],
                 "inputs_hash": [fingerprint],
-                "computed_from": [source_week],
+                # Explicit string dtype: an all-None column would otherwise be
+                # created as INTEGER and later weeks could not store a date string
+                "computed_from": pd.Series([source_week], dtype="string"),
                 "recorded_at": [datetime.now()],
             }
         ),
