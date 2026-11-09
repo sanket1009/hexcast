@@ -319,6 +319,10 @@ def _summarize_week(
     # Drop neighbor monitors outside the buffer around the city
     weekly_df = _filter_to_buffer(weekly_df, config)
 
+    # Drop individual monitors with impossible values (one faulty sensor
+    # should not erase the week; Kriging fills the gap from neighbors)
+    weekly_df = _drop_invalid_monitors(weekly_df, week_start)
+
     city_rows = weekly_df[weekly_df["in_city"]]
     logger.info(
         f"Week {week_start:%Y-%m-%d}: {len(weekly_df)} monitor summaries "
@@ -652,6 +656,47 @@ def _flag_exceedances(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     return df
+
+
+# PM2.5 weekly means outside this range are instrument or reporting errors
+PM25_VALID_RANGE = (0.0, 500.0)
+# More invalid monitors than this share means a dataset problem, not a sensor
+MAX_INVALID_SHARE = 0.25
+
+
+def _drop_invalid_monitors(
+    weekly_df: pd.DataFrame, week_start: datetime
+) -> pd.DataFrame:
+    """
+    Remove monitors whose weekly mean is impossible (negative or above 500).
+
+    A single faulty sensor is dropped for that week and logged. If more than
+    MAX_INVALID_SHARE of the monitors are invalid, the problem is the data
+    (EPA response or our parsing), so the week is rejected instead.
+    """
+    low, high = PM25_VALID_RANGE
+    invalid = (weekly_df["pm25_mean"] < low) | (weekly_df["pm25_mean"] > high)
+    n_invalid = int(invalid.sum())
+    if n_invalid == 0:
+        return weekly_df
+
+    share = n_invalid / len(weekly_df)
+    if share > MAX_INVALID_SHARE:
+        raise ValueError(
+            f"{n_invalid} of {len(weekly_df)} monitors have PM2.5 outside "
+            f"{low:g}-{high:g} μg/m³ — data quality issue in EPA AQS response"
+        )
+
+    dropped = weekly_df.loc[invalid, ["monitor_id", "pm25_mean", "in_city"]]
+    logger.warning(
+        f"Week {week_start:%Y-%m-%d}: dropped {n_invalid} of {len(weekly_df)} "
+        f"monitors with invalid PM2.5: "
+        + ", ".join(
+            f"{r.monitor_id} ({r.pm25_mean:.2f}{', city' if r.in_city else ''})"
+            for r in dropped.itertuples()
+        )
+    )
+    return weekly_df.loc[~invalid].reset_index(drop=True)
 
 
 def _validate_output(
