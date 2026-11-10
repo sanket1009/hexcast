@@ -54,7 +54,7 @@ DRIVER_LABELS = {
 }
 
 LST = "Land surface temperature, mean (°C)"
-PM25 = "PM2.5, Kriged annual mean (µg/m³)"
+PM25 = "PM2.5, annual mean (µg/m³)"  # must match risk_inputs.INDICATORS
 BEDS = "Hospital beds per 1,000 residents, 30-minute drive"
 ER = "Drive time to nearest ER (minutes)"
 
