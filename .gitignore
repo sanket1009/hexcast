@@ -225,3 +225,6 @@ data/alerts/
 
 # Airflow logs copied out of the worker for debugging
 _airflow_logs*/
+
+# Eval run outputs (baselines/ stays tracked)
+evals/results/
