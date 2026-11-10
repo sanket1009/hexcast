@@ -42,6 +42,20 @@ DEFAULT_ARGS = {
 
 WEEK_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
+# DuckDB allows one process at a time to open the warehouse for writing.
+# Tasks that write it share this 1-slot pool, so they wait in the queue
+# instead of colliding and retrying 5 minutes later. The pool is created by
+# airflow-init (docker-compose.yml). BigQuery has no such limit, so the pool
+# is only used with the local backend.
+WAREHOUSE_POOL = "duckdb_writer"
+
+
+def warehouse_pool() -> dict:
+    """Task arguments for a task that writes the warehouse: @task(**warehouse_pool())."""
+    if PIPELINE["storage"]["backend"] == "local":
+        return {"pool": WAREHOUSE_POOL}
+    return {}
+
 
 def city_schedule(city: str) -> dict:
     city_yaml = yaml.safe_load(

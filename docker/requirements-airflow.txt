@@ -54,7 +54,7 @@ tiktoken==0.9.0
 earthengine-api==1.7.38
 google-cloud-bigquery==3.43.0
 google-cloud-bigquery-storage==2.40.0
-google-cloud-storage==2.19.0
+google-cloud-storage==3.11.0
 pyarrow==20.0.0
 db-dtypes==1.4.2
 duckdb==1.5.6              # local warehouse (storage.backend: local)
@@ -62,7 +62,7 @@ duckdb==1.5.6              # local warehouse (storage.backend: local)
 # Utilities
 pyyaml==6.0.3
 python-dotenv==1.1.0
-requests==2.32.3
+requests==2.32.5
 tenacity==9.1.4
 tqdm==4.67.1
 numpy==2.2.6

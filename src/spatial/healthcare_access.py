@@ -70,6 +70,7 @@ import osmnx as ox
 import pandas as pd
 import requests
 
+from src.spatial.road_graph import RoadGraph
 from src.utils.bigquery import (
     REPLACE_PARTITION,
     read_query,
@@ -158,7 +159,6 @@ def compute_2sfca(
 
     hc = config["healthcare"]
     catchment_minutes = hc["er_catchment_minutes"]
-    snap_max_m = hc.get("snap_max_m", 2000.0)
 
     logger.info(
         f"Computing 2SFCA ER access for {config['city_name']} "
@@ -187,20 +187,42 @@ def compute_2sfca(
             _record_run(config, week_start, fingerprint, source_week)
             return access_df
 
-    # Step 3 — Road network for the buffered bbox (cached)
-    G = _get_road_network(config, refresh=refresh_network)
+    access_df = _compute_access(
+        config, tracts_df, hospitals_df, week_start, refresh_network
+    )
+    write_dataframe(
+        access_df, "healthcare_access", config, write_disposition=REPLACE_PARTITION
+    )
+    _record_run(config, week_start, fingerprint, source_week=None)
+
+    return access_df
+
+
+def _compute_access(
+    config: dict[str, Any],
+    tracts_df: pd.DataFrame,
+    hospitals_df: pd.DataFrame,
+    week_start: datetime,
+    refresh_network: bool = False,
+) -> pd.DataFrame:
+    """Steps 3-8: the network analysis. Returns the table, writes nothing."""
+    hc = config["healthcare"]
+    catchment_minutes = hc["er_catchment_minutes"]
+    snap_max_m = hc.get("snap_max_m", 2000.0)
+
+    # Step 3 — Road network for the buffered bbox (compact cache)
+    graph = _get_road_network(config, refresh=refresh_network)
 
     # Step 4 — Snap to the strongly connected core; far-off points are unreachable
-    G_core = _strong_core(G)
+    core = _strong_core(graph)
     tracts_df["node"], tracts_df["snap_distance_m"] = _snap_to_network(
-        G_core, tracts_df["centroid_lon"].values, tracts_df["centroid_lat"].values
+        graph, tracts_df["centroid_lon"].values, tracts_df["centroid_lat"].values, core
     )
     tracts_df["reachable"] = tracts_df["snap_distance_m"] <= snap_max_m
 
     hospitals_df["node"], hospitals_df["snap_distance_m"] = _snap_to_network(
-        G_core, hospitals_df["longitude"].values, hospitals_df["latitude"].values
+        graph, hospitals_df["longitude"].values, hospitals_df["latitude"].values, core
     )
-    del G_core
     far = hospitals_df["snap_distance_m"] > snap_max_m
     if far.any():
         logger.warning(
@@ -219,9 +241,9 @@ def compute_2sfca(
 
     # Step 5 — Travel times tract -> hospital within the catchment
     travel_times = _compute_travel_times(
-        G, tracts_df[tracts_df["reachable"]], hospitals_df, catchment_minutes
+        graph, tracts_df[tracts_df["reachable"]], hospitals_df, catchment_minutes
     )
-    del G  # free a few GB before the table work
+    del graph
 
     # Step 6 — 2SFCA step 1: supply-to-demand ratio per hospital
     hospital_ratios = _compute_hospital_ratios(travel_times, hospitals_df, tracts_df)
@@ -242,11 +264,6 @@ def compute_2sfca(
     access_df["city_fips"] = config["full_fips"]
 
     _validate_output(access_df, catchment_minutes)
-    write_dataframe(
-        access_df, "healthcare_access", config, write_disposition=REPLACE_PARTITION
-    )
-    _record_run(config, week_start, fingerprint, source_week=None)
-
     return access_df
 
 
@@ -488,61 +505,87 @@ def _load_hospital_data(config: dict[str, Any]) -> pd.DataFrame:
     return df
 
 
-def _get_road_network(config: dict[str, Any], refresh: bool = False) -> nx.MultiDiGraph:
+def _get_road_network(config: dict[str, Any], refresh: bool = False) -> RoadGraph:
     """
-    Drive network for the buffered bbox, with travel_time on every edge.
+    Drive network for the buffered bbox, as a compact RoadGraph.
 
-    Downloaded once from OpenStreetMap and saved as GraphML; later runs
-    load the file in seconds. The cache name carries the bbox buffer and
-    network type, so changing either downloads a fresh network.
+    Three levels of cache, cheapest first:
+        <name>_compact/   Parquet node coordinates and edge travel times;
+                          loads in about a second with little memory
+        <name>.graphml    the full OSMnx graph; loading it takes several GB,
+                          so it is only read once to build the compact cache
+        download          OpenStreetMap via Geofabrik or Overpass
+    The cache name carries the bbox buffer and network type, so changing
+    either downloads a fresh network.
     """
-    hc = config["healthcare"]
-    buffer_km = hc.get("buffer_km", 0.0)
+    graphml = _graphml_path(config)
+    compact = graphml.with_name(f"{graphml.stem}_compact")
+
+    if compact.exists() and not refresh:
+        logger.info(f"Loading compact road network: {compact}")
+        graph = RoadGraph.load(compact)
+    else:
+        G = _get_networkx_graph(config, graphml, refresh)
+        graph = RoadGraph.from_networkx(G)
+        del G
+        graph.save(compact)
+        logger.info(f"Saved compact road network to {compact}")
+
+    logger.info(f"Road network: {graph.n_nodes:,} nodes, {graph.n_edges:,} edges")
+    return graph
+
+
+def _graphml_path(config: dict[str, Any]) -> Path:
+    buffer_km = config["healthcare"].get("buffer_km", 0.0)
     network_type = config["osmnx"]["network_type"]
-    path = NETWORK_CACHE_DIR / (
+    return NETWORK_CACHE_DIR / (
         f"{config['full_fips']}_{network_type}_buffer{buffer_km:g}km.graphml"
     )
 
+
+def _get_networkx_graph(
+    config: dict[str, Any], path: Path, refresh: bool
+) -> nx.MultiDiGraph:
+    """The full OSMnx graph with travel_time on every edge: from GraphML, or built."""
     if path.exists() and not refresh:
-        logger.info(f"Loading cached road network: {path}")
-        G = ox.load_graphml(path)
-    else:
-        west, south, east, north = get_buffered_bbox(config, buffer_km)
-        bbox = (west, south, east, north)
-        source = config["osmnx"].get("road_source", "overpass")
-        logger.info(
-            f"Building OSM '{network_type}' network from {source} for buffered bbox "
-            f"W{west:.3f} S{south:.3f} E{east:.3f} N{north:.3f}"
-        )
-        if source == "geofabrik":
-            if network_type != "drive":
-                raise ValueError(
-                    "road_source 'geofabrik' implements the 'drive' filter only"
-                )
-            url = config["osmnx"].get("geofabrik_url")
-            if not url:
-                raise ValueError(
-                    "osmnx.geofabrik_url is required when road_source is 'geofabrik'"
-                )
-            G = graph_from_extract(url, bbox, OSM_EXTRACT_DIR, refresh=refresh)
-        elif source == "overpass":
-            G = _download_with_retry(config, bbox, network_type)
-        else:
-            raise ValueError(
-                f"Unknown osmnx.road_source '{source}' (use 'geofabrik' or 'overpass')"
-            )
-        # Speed from OSM maxspeed tags; untagged roads get the mean of their
-        # highway type, then the configured fallback
-        G = ox.add_edge_speeds(G, fallback=config["osmnx"]["speed_kmh_default"])
-        G = ox.add_edge_travel_times(G)
+        logger.info(f"Loading cached road network (GraphML, high memory): {path}")
+        return ox.load_graphml(path)
 
-        NETWORK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        ox.save_graphml(G, path)
-        logger.info(f"Saved road network to {path}")
-
-    logger.info(
-        f"Road network: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges"
+    network_type = config["osmnx"]["network_type"]
+    west, south, east, north = get_buffered_bbox(
+        config, config["healthcare"].get("buffer_km", 0.0)
     )
+    bbox = (west, south, east, north)
+    source = config["osmnx"].get("road_source", "overpass")
+    logger.info(
+        f"Building OSM '{network_type}' network from {source} for buffered bbox "
+        f"W{west:.3f} S{south:.3f} E{east:.3f} N{north:.3f}"
+    )
+    if source == "geofabrik":
+        if network_type != "drive":
+            raise ValueError(
+                "road_source 'geofabrik' implements the 'drive' filter only"
+            )
+        url = config["osmnx"].get("geofabrik_url")
+        if not url:
+            raise ValueError(
+                "osmnx.geofabrik_url is required when road_source is 'geofabrik'"
+            )
+        G = graph_from_extract(url, bbox, OSM_EXTRACT_DIR, refresh=refresh)
+    elif source == "overpass":
+        G = _download_with_retry(config, bbox, network_type)
+    else:
+        raise ValueError(
+            f"Unknown osmnx.road_source '{source}' (use 'geofabrik' or 'overpass')"
+        )
+    # Speed from OSM maxspeed tags; untagged roads get the mean of their
+    # highway type, then the configured fallback
+    G = ox.add_edge_speeds(G, fallback=config["osmnx"]["speed_kmh_default"])
+    G = ox.add_edge_travel_times(G)
+
+    NETWORK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    ox.save_graphml(G, path)
+    logger.info(f"Saved road network to {path}")
     return G
 
 
@@ -591,9 +634,9 @@ def _download_with_retry(
             time.sleep(wait)
 
 
-def _strong_core(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
+def _strong_core(graph: RoadGraph) -> np.ndarray:
     """
-    View of the largest strongly connected component.
+    Node indices of the largest strongly connected component.
 
     The network keeps the largest WEAKLY connected component, so some nodes
     can be entered but not left by car (end of a one-way spur, an exit-only
@@ -603,18 +646,19 @@ def _strong_core(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
     connected core guarantees a route both ways. Travel times still use
     the full network.
     """
-    core = max(nx.strongly_connected_components(G), key=len)
+    core = graph.strong_core()
     logger.info(
         f"Snapping to strongly connected core: {len(core):,} of "
-        f"{G.number_of_nodes():,} nodes ({len(core) / G.number_of_nodes():.1%})"
+        f"{graph.n_nodes:,} nodes ({len(core) / graph.n_nodes:.1%})"
     )
-    return G.subgraph(core)
+    return core
 
 
 def _snap_to_network(
-    G: nx.MultiDiGraph,
+    graph: RoadGraph,
     longitudes: np.ndarray,
     latitudes: np.ndarray,
+    among: np.ndarray | None = None,
 ) -> tuple[list[int], np.ndarray]:
     """
     Nearest network node for each point, and the distance to it in meters.
@@ -622,8 +666,8 @@ def _snap_to_network(
     The distance is what lets us refuse a snap: an island centroid's
     nearest node is on the mainland coast, kilometers away.
     """
-    nodes, dists = ox.distance.nearest_nodes(G, longitudes, latitudes, return_dist=True)
-    return list(nodes), np.asarray(dists, dtype=float)
+    nodes, dists = graph.nearest(longitudes, latitudes, among=among)
+    return nodes.tolist(), np.asarray(dists, dtype=float)
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +676,7 @@ def _snap_to_network(
 
 
 def _compute_travel_times(
-    G: nx.MultiDiGraph,
+    graph: RoadGraph,
     tracts_df: pd.DataFrame,
     hospitals_df: pd.DataFrame,
     catchment_minutes: int,
@@ -651,7 +695,6 @@ def _compute_travel_times(
         geoid, hospital_id, travel_time_minutes, decay_weight
     """
     cutoff = catchment_minutes * 60
-    R = G.reverse(copy=False)
 
     node_to_tracts: dict[int, list[str]] = {}
     for geoid, node in zip(tracts_df["geoid"], tracts_df["node"], strict=False):
@@ -664,9 +707,7 @@ def _compute_travel_times(
     for k, (hid, hnode) in enumerate(
         zip(hospitals_df["hospital_id"], hospitals_df["node"], strict=False), 1
     ):
-        lengths = nx.single_source_dijkstra_path_length(
-            R, source=hnode, cutoff=cutoff, weight="travel_time"
-        )
+        lengths = graph.travel_times_to(hnode, cutoff)
         for node, seconds in lengths.items():
             for geoid in node_to_tracts.get(node, ()):
                 records.append((geoid, hid, seconds / 60.0))
