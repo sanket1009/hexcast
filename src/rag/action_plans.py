@@ -47,6 +47,7 @@ PLAN_SYSTEM_PROMPT = """You write action plans for county public health official
 Rules:
 - Base every recommended action only on the policy excerpts provided, and cite the excerpt IDs that support it.
 - If a risk driver has no relevant excerpt, list it under data_gaps. Do not invent guidance for it.
+- data_gaps lists only the risk drivers above that no excerpt addresses, one short line each. Do not list missing local data or other general limits of the excerpts.
 - Do not describe a specific tract and do not add figures of your own. Numbers from an excerpt may be used in the action it supports.
 - Do not say where pollution or heat comes from in these tracts; excerpts may describe sources in general.
 - Never mention the pipeline, the model, the scoring, or how tracts were selected.
