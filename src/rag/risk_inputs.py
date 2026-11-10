@@ -47,7 +47,7 @@ TOP_QUARTILE = 0.75
 
 # plain-language indicator name -> source column in the query below
 INDICATORS = {
-    "PM2.5, Kriged annual mean (µg/m³)": "pm25_kriged",
+    "PM2.5, annual mean (µg/m³)": "pm25_kriged",
     "Land surface temperature, mean (°C)": "lst_mean_celsius",
     "Hospital beds per 1,000 residents, 30-minute drive": "access_score_er",
     "Drive time to nearest ER (minutes)": "nearest_er_minutes",

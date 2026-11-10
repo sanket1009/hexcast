@@ -16,9 +16,13 @@ Usage (from the project folder, with ANTHROPIC_API_KEY set):
     python3 scripts/run_briefings_week.py --week 2026-06-22 --mode sample
     python3 scripts/run_briefings_week.py --week 2026-06-22 --mode full --confirm-full
 
-Outputs go to data/briefing_runs/<week>/:
-    sample_checkpoint.jsonl, sample_warehouse.duckdb, sample_review.md
-    full_checkpoint.jsonl
+By default each briefing is a shared action plan (one model call per driver
+combination, see src/rag/action_plans.py) plus a tract summary from a
+template. --per-tract uses the old one-call-per-tract format.
+
+Outputs go to data/briefing_runs/<week>_plans/ (or <week>/ with --per-tract):
+    plans.jsonl, sample_checkpoint.jsonl, sample_warehouse.duckdb,
+    sample_review.md, full_checkpoint.jsonl
 """
 
 import argparse
@@ -35,6 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)  # config and warehouse paths are relative
 
+from src.rag.action_plans import PlanBriefingGenerator  # noqa: E402
 from src.rag.briefing import BriefingGenerator  # noqa: E402
 from src.rag.briefing_runner import (  # noqa: E402
     commit_week,
@@ -52,12 +57,24 @@ def load_config() -> dict:
     }
 
 
+def make_generator(config: dict, out_dir: Path, per_tract: bool) -> BriefingGenerator:
+    """Shared action plans by default; plans.jsonl is reused by the full run."""
+    if per_tract:
+        return BriefingGenerator(config)
+    return PlanBriefingGenerator(config, plan_cache_path=out_dir / "plans.jsonl")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--week", required=True, help="Week start date, e.g. 2026-06-22")
     parser.add_argument("--mode", choices=["sample", "full"], default="sample")
     parser.add_argument("--confirm-full", action="store_true")
     parser.add_argument("--allow-partial", action="store_true")
+    parser.add_argument(
+        "--per-tract",
+        action="store_true",
+        help="One model call per tract (old format) instead of shared action plans",
+    )
     args = parser.parse_args()
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -66,7 +83,9 @@ def main() -> int:
     week_start = date.fromisoformat(args.week)
     config = load_config()
     live_db = Path(config["storage"]["local_db_path"])
-    out_dir = ROOT / "data" / "briefing_runs" / args.week
+    # Plan-format runs get their own folder, so old per-tract checkpoints are not reused
+    run_name = args.week if args.per_tract else f"{args.week}_plans"
+    out_dir = ROOT / "data" / "briefing_runs" / run_name
     out_dir.mkdir(parents=True, exist_ok=True)
     sample_ckpt = out_dir / "sample_checkpoint.jsonl"
     full_ckpt = out_dir / "full_checkpoint.jsonl"
@@ -82,7 +101,7 @@ def main() -> int:
         chosen = select_sample(risks)
         print(f"Sample: {len(chosen)} tracts out of {len(risks)} HIGH or CRITICAL")
 
-        generator = BriefingGenerator(sample_config)
+        generator = make_generator(sample_config, out_dir, args.per_tract)
         briefings, failures = run_week(chosen, generator, sample_ckpt)
         if briefings:
             commit_week(briefings, failures, week_start, sample_config, allow_partial=True)
@@ -103,7 +122,7 @@ def main() -> int:
     if not full_ckpt.exists():
         shutil.copy(sample_ckpt, full_ckpt)  # reuse the sample's briefings
 
-    generator = BriefingGenerator(config)
+    generator = make_generator(config, out_dir, args.per_tract)
     briefings, failures = run_week(risks, generator, full_ckpt)
     commit_week(briefings, failures, week_start, config, allow_partial=args.allow_partial)
 
