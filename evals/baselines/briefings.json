@@ -1,0 +1,27 @@
+{
+  "manifest": {
+    "week": "2026-06-22",
+    "suites": "faithfulness,rules,specificity",
+    "rank_by": "burden_percentile",
+    "git_sha": "5685064",
+    "git_dirty": true,
+    "system_prompt_hash": "5682fc3406c8",
+    "rag_config_hash": "17e806af2f66",
+    "briefing_models": "claude-haiku-5-5",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "max_distance": 0.5,
+    "evaluated_at": "2026-11-10T00:13:43+00:00"
+  },
+  "metrics": {
+    "faithfulness.numbers_match_data": 1.0,
+    "faithfulness.urgency_matches": 0.9952,
+    "faithfulness.drivers_mentioned": 1.0,
+    "faithfulness.drivers_accounted": 1.0,
+    "rules.no_source_named": 0.992,
+    "rules.no_system_talk": 1.0,
+    "rules.no_jargon": 0.9185,
+    "rules.reading_grade.median": 12.3,
+    "specificity.driver_separation": 0.234,
+    "specificity.duplicate_source_sets": 0.995
+  }
+}
