@@ -53,6 +53,10 @@ x-airflow-common:
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Los_Angeles
 
+    # matplotlib needs a writable cache folder; without this it warns on every
+    # task that imports it (variogram and access plots)
+    MPLCONFIGDIR: /tmp/matplotlib
+
   volumes:
     # The whole repository: code, config, the DuckDB warehouse, object store,
     # road network cache and ChromaDB store under data/
@@ -191,8 +195,9 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  # One-off: migrates the metadata database and creates the UI user, then exits.
-  # The image entrypoint does both when these _AIRFLOW_* variables are set.
+  # One-off: migrates the metadata database and creates the UI user (the image
+  # entrypoint does both when these _AIRFLOW_* variables are set), then creates
+  # the duckdb_writer pool (1 slot: DuckDB allows one writer) and exits.
   airflow-init:
     <<: *airflow-common
     # Only this service builds the image. With build: in the shared block,
@@ -200,7 +205,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.airflow
-    command: version
+    command: >
+      bash -c "airflow pools set duckdb_writer 1 'DuckDB allows one writer at a time'"
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'

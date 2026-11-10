@@ -55,7 +55,7 @@ scipy==1.18.1              # variogram fitting + Wilcoxon signed-rank test
 earthengine-api==1.7.38    # Google Earth Engine Python API
 google-cloud-bigquery==3.43.0       # BigQuery read/write
 google-cloud-bigquery-storage==2.40.0  # fast BigQuery reads via Arrow
-google-cloud-storage==2.19.0        # GCS bucket read/write
+google-cloud-storage==3.11.0        # GCS bucket read/write
 db-dtypes==1.4.2           # BigQuery ↔ pandas type conversions
 duckdb==1.5.6              # local warehouse for development (storage.backend: local)
 pyarrow==20.0.0            # columnar memory format — GeoParquet + BigQuery
@@ -111,7 +111,7 @@ httpx==0.28.1              # async HTTP client for FastAPI test client
 
 pyyaml==6.0.3              # reads los_angeles.yaml, pipeline.yaml, chicago.yaml
 python-dotenv==1.1.0       # loads .env file into environment variables
-requests==2.32.3           # HTTP calls to EPA AQS and CDC PLACES APIs
+requests==2.32.5           # HTTP calls to EPA AQS and CDC PLACES APIs
 tenacity==9.1.4            # retry logic for API calls with backoff
 tqdm==4.67.1               # progress bars for long-running spatial operations
 

@@ -16,8 +16,10 @@ Tasks:
     trigger_alert_dispatch  starts alert_dispatch_<city> for the same week,
                        unless the run has {"notify": false} (backfills)
 
-The first three are independent and run in parallel. Every write replaces
-its week and city, so retries and reruns never duplicate rows.
+The first three are independent, but with the local DuckDB backend they share
+the 1-slot duckdb_writer pool and run one at a time (DuckDB allows a single
+writer). Every write replaces its week and city, so retries and reruns never
+duplicate rows.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from chbindex_common import (
     DEFAULT_ARGS,
     WEEK_PATTERN,
     project_config,
+    warehouse_pool,
     week_start,
 )
 
@@ -67,13 +70,13 @@ def build_spatial_dag(city: str):
             print(f"Spatial transform for week starting {week}, {city}")
             return week.isoformat()
 
-        @task
+        @task(**warehouse_pool())
         def run_kriging(week: str) -> int:
             from src.spatial.kriging import run_kriging as krige
 
             return len(krige(project_config(city), week_start=week_start(week)))
 
-        @task
+        @task(**warehouse_pool())
         def process_lst(week: str) -> int:
             from src.spatial.lst_processing import process_lst_raster
 
@@ -81,13 +84,13 @@ def build_spatial_dag(city: str):
                 process_lst_raster(project_config(city), week_start=week_start(week))
             )
 
-        @task
+        @task(**warehouse_pool())
         def healthcare_access(week: str) -> int:
             from src.spatial.healthcare_access import compute_2sfca
 
             return len(compute_2sfca(project_config(city), week_start=week_start(week)))
 
-        @task
+        @task(**warehouse_pool())
         def compound_score(week: str) -> dict:
             from src.spatial.compound_score import compute_compound_score
 
@@ -96,7 +99,7 @@ def build_spatial_dag(city: str):
             )
             return df["burden_class"].value_counts().to_dict()
 
-        @task
+        @task(**warehouse_pool())
         def hotspots(week: str) -> dict:
             from src.spatial.hotspots import detect_hotspots
 

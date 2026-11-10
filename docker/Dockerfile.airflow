@@ -43,6 +43,12 @@ RUN pip install --no-cache-dir \
     "apache-airflow==${AIRFLOW_VERSION}" \
     -r /requirements-airflow.txt
 
+# The base image bundles the Snowflake provider, which CHBIndex does not use.
+# It needs pandas < 2.2, which conflicts with the spatial stack (pandas 2.3),
+# so `pip check` failed. Removing it leaves no dependency conflicts.
+RUN pip uninstall -y apache-airflow-providers-snowflake snowflake-connector-python snowflake-sqlalchemy \
+    && python -m pip check
+
 # Tasks import src.*; the repository is mounted here by docker-compose.yml
 ENV PYTHONPATH="/opt/chbindex"
 WORKDIR /opt/chbindex
