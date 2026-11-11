@@ -114,7 +114,8 @@ rag:
   # Briefing (briefing.py)
   anthropic:
     model: "claude-haiku-5-5"
-    max_tokens: 3000          # headroom for adaptive thinking plus the JSON
+    max_tokens: 4000          # headroom for adaptive thinking plus the JSON; 3000 cut off
+                              # one 3-driver plan in A7 (Phase 5.1)
   urgency_levels:
     - "MONITOR"
     - "ELEVATED"

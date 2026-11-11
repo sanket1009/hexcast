@@ -43,7 +43,9 @@ def action_text(b: Briefing) -> str:
 # case-insensitive and on word boundaries.
 DRIVER_TERMS = {
     "heat": r"heat|temperature|hot|cooling|cool",
-    "air_quality": r"pm2\.5|particle|particulate|air quality|air pollution|pollution|air filtration|filters?",
+    # Phase 5.1: concrete actions name the device or condition ("air cleaners",
+    # "smoke"), not only "filters"
+    "air_quality": r"pm2\.5|particles?|particulate|air quality|air pollution|pollution|air filtration|filters?|air cleaners?|air purifiers?|smoke|recirculation",
     "healthcare_access": r"hospitals?|health ?care|emergency (room|department|care)|beds|medical|clinics?|EMTs?|ER",
 }
 DRIVER_PATTERNS = {

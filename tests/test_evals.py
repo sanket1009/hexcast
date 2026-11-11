@@ -268,3 +268,11 @@ def test_urgency_separation_is_zero_when_urgency_levels_share_text():
         for i, u in enumerate(["CRITICAL", "ELEVATED", "CRITICAL", "ELEVATED"])
     ]
     assert specificity_metrics(cases)["urgency_separation"] == 0.0
+
+
+def test_air_quality_actions_named_by_device_count_as_accounted():
+    case = _case(
+        drivers=("air_quality",),
+        actions=(("Help residents get portable air cleaners.", "p.pdf, p. 1"),),
+    )
+    assert drivers_accounted(case).value == 1.0
