@@ -3,14 +3,14 @@
     "week": "2026-06-22",
     "suites": "faithfulness,rules,specificity",
     "rank_by": "raw_burden",
-    "git_sha": "5bbfe0d",
-    "git_dirty": true,
+    "git_sha": "077d7a3",
+    "git_dirty": false,
     "system_prompt_hash": "871d5031bb30",
-    "rag_config_hash": "17e806af2f66",
+    "rag_config_hash": "faf9d42fe583",
     "briefing_models": "claude-haiku-5-5",
-    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-    "max_distance": 0.5,
-    "evaluated_at": "2026-11-11T04:10:15+00:00"
+    "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
+    "max_distance": 0.48,
+    "evaluated_at": "2026-11-11T18:10:43+00:00"
   },
   "metrics": {
     "faithfulness.numbers_match_data": 1.0,
@@ -20,8 +20,9 @@
     "rules.no_source_named": 1.0,
     "rules.no_system_talk": 1.0,
     "rules.no_jargon": 1.0,
-    "rules.reading_grade.median": 12.6,
-    "specificity.driver_separation": 0.467,
-    "specificity.duplicate_source_sets": 0.971
+    "rules.reading_grade.median": 10.0,
+    "specificity.driver_separation": 0.421,
+    "specificity.group_separation": 0.362,
+    "specificity.duplicate_source_sets": 0.979
   }
 }

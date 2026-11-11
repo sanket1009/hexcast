@@ -97,7 +97,7 @@ def get_collection(config: dict[str, Any], create: bool = False):
     rag_cfg = config["rag"]
     city_fips = config["full_fips"]
     model_name = rag_cfg["embedding_model"]
-    name = f"{rag_cfg['collection_prefix']}_{city_fips}"
+    name = collection_name(rag_cfg, city_fips)
 
     client = _get_client(rag_cfg["chroma_dir"])
 
@@ -119,6 +119,35 @@ def get_collection(config: dict[str, Any], create: bool = False):
 
     _check_embedding_model(collection, model_name)
     return collection
+
+
+def collection_name(rag_cfg: dict[str, Any], city_fips: str) -> str:
+    """One collection per embedding model.
+
+    The configured model keeps the plain name; a model under comparison
+    (scripts/eval_retrieval.py --embedding-model) gets its own suffix, so
+    the production store is never overwritten by an experiment.
+    """
+    base = f"{rag_cfg['collection_prefix']}_{city_fips}"
+    suffix = rag_cfg.get("collection_suffix")
+    return f"{base}_{suffix}" if suffix else base
+
+
+def encode_kwargs(rag_cfg: dict[str, Any], role: str) -> dict[str, str]:
+    """sentence-transformers encode() arguments for 'query' or 'document' text.
+
+    Per model in rag.embedding_prompts:
+        <role>: name of a prompt stored with the model (prompt_name)
+        <role>_text: literal prompt text, e.g. a custom task instruction
+    Instruction-tuned models (e.g. Qwen3-Embedding) prefix queries with a task
+    instruction and embed documents plain. Unlisted models encode plain text.
+    """
+    prompts = rag_cfg.get("embedding_prompts", {}).get(rag_cfg["embedding_model"], {})
+    if text := prompts.get(f"{role}_text"):
+        return {"prompt": text}
+    if name := prompts.get(role):
+        return {"prompt_name": name}
+    return {}
 
 
 # ---------------------------------------------------------------------------

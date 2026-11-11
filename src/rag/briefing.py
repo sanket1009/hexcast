@@ -195,6 +195,7 @@ class BriefingGenerator:
         self.max_tokens = rag_cfg["anthropic"]["max_tokens"]
         self.levels = rag_cfg["urgency_levels"]
         self.driver_queries = rag_cfg["driver_queries"]
+        self.group_queries = rag_cfg.get("group_queries", {})
         self.per_driver = rag_cfg["briefing_excerpts_per_driver"]
         self.default_group = rag_cfg["default_vulnerable_group"]
 

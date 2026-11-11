@@ -1,0 +1,629 @@
+{
+ "version": "v1",
+ "created": "2026-11-11",
+ "corpus": "data/policy_docs/los_angeles (12 PDFs, frozen 2026-11-11)",
+ "labeling": "Page-level, binary. A page is relevant when it gives guidance, a program, or an action that answers the query; pages that only describe who is vulnerable are not. Candidates came from keyword search over page text, not from the retriever, so labels do not inherit the embedding model's blind spots. Queries are worded unlike the driver/group templates. Empty 'relevant' = negative: the corpus has no answer, so the right result is nothing within the cutoff (neg_telehealth and neg_uninsured sound on-topic; the rest are off-topic). Pooling (2026-11-11): unlabeled pages in MiniLM's top 3 at cutoff 0.5 were judged by the same rule; 5 of 30 were relevant and added.",
+ "queries": [
+  {
+   "id": "heat_older",
+   "driver": "heat",
+   "group": "age_65_plus",
+   "query": "keeping seniors safe during a heat wave",
+   "relevant": [
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 20
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 21
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 61
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 76
+    }
+   ]
+  },
+  {
+   "id": "heat_young",
+   "driver": "heat",
+   "group": "under_5",
+   "query": "protecting babies and toddlers from extreme heat",
+   "relevant": [
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 21
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 47
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 61
+    }
+   ]
+  },
+  {
+   "id": "heat_lowinc",
+   "driver": "heat",
+   "group": "low_income",
+   "query": "help paying for air conditioning and cooling bills for low-income households",
+   "relevant": [
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 67
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 54
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 63
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 59
+    }
+   ]
+  },
+  {
+   "id": "heat_nocar",
+   "driver": "heat",
+   "group": "no_vehicle",
+   "query": "getting to a cooling center without a car",
+   "relevant": [
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 72
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 96
+    }
+   ]
+  },
+  {
+   "id": "heat_lep",
+   "driver": "heat",
+   "group": "limited_english",
+   "query": "heat warnings in languages other than English",
+   "relevant": [
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 6
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 69
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 76
+    }
+   ]
+  },
+  {
+   "id": "heat_disab",
+   "driver": "heat",
+   "group": "disability",
+   "query": "people with disabilities during extreme heat",
+   "relevant": [
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 20
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 21
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 61
+    }
+   ]
+  },
+  {
+   "id": "heat_renters",
+   "driver": "heat",
+   "group": "",
+   "query": "keeping apartments cool for renters",
+   "relevant": [
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 54
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 56
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 57
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 58
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 90
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 91
+    }
+   ]
+  },
+  {
+   "id": "heat_cool_spaces",
+   "driver": "heat",
+   "group": "",
+   "query": "places residents can go to cool off on hot days",
+   "relevant": [
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 70
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 72
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 95
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 96
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 59
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 68
+    }
+   ]
+  },
+  {
+   "id": "aq_older",
+   "driver": "air_quality",
+   "group": "age_65_plus",
+   "query": "reducing older residents' exposure to fine particle pollution",
+   "relevant": [
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 40
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 41
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 42
+    },
+    {
+     "source": "epa_guide_air_cleaners_home_2018.pdf",
+     "page": 2
+    },
+    {
+     "source": "epa_guide_air_cleaners_home_2018.pdf",
+     "page": 3
+    },
+    {
+     "source": "cdph_wildfire_smoke_guidance_2022.pdf",
+     "page": 35
+    }
+   ]
+  },
+  {
+   "id": "aq_young",
+   "driver": "air_quality",
+   "group": "under_5",
+   "query": "air filters in schools and daycare centers",
+   "relevant": [
+    {
+     "source": "scaqmd_ab617_school_air_filtration_plan.pdf",
+     "page": 2
+    },
+    {
+     "source": "scaqmd_ab617_school_air_filtration_plan.pdf",
+     "page": 3
+    },
+    {
+     "source": "scaqmd_ab617_school_air_filtration_plan.pdf",
+     "page": 6
+    },
+    {
+     "source": "cdph_wildfire_smoke_guidance_2022.pdf",
+     "page": 50
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 41
+    }
+   ]
+  },
+  {
+   "id": "aq_free_purifiers",
+   "driver": "air_quality",
+   "group": "low_income",
+   "query": "free air purifiers for families living near pollution sources",
+   "relevant": [
+    {
+     "source": "scaqmd_ab617_residential_air_filtration_plan_2022.pdf",
+     "page": 2
+    },
+    {
+     "source": "scaqmd_ab617_residential_air_filtration_plan_2022.pdf",
+     "page": 5
+    },
+    {
+     "source": "scaqmd_ab617_residential_air_filtration_plan_2022.pdf",
+     "page": 6
+    },
+    {
+     "source": "scaqmd_ab617_residential_air_filtration_plan_2022.pdf",
+     "page": 7
+    },
+    {
+     "source": "scaqmd_ab617_residential_air_filtration_2025.pdf",
+     "page": 1
+    }
+   ]
+  },
+  {
+   "id": "aq_hepa_size",
+   "driver": "air_quality",
+   "group": "",
+   "query": "choosing a HEPA portable air cleaner sized for the room",
+   "relevant": [
+    {
+     "source": "epa_guide_air_cleaners_home_2018.pdf",
+     "page": 3
+    },
+    {
+     "source": "cdph_wildfire_smoke_guidance_2022.pdf",
+     "page": 41
+    },
+    {
+     "source": "cdph_wildfire_smoke_guidance_2022.pdf",
+     "page": 43
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 42
+    }
+   ]
+  },
+  {
+   "id": "aq_merv",
+   "driver": "air_quality",
+   "group": "",
+   "query": "upgrading home furnace and HVAC filters to MERV 13",
+   "relevant": [
+    {
+     "source": "epa_guide_air_cleaners_home_2018.pdf",
+     "page": 4
+    },
+    {
+     "source": "epa_guide_air_cleaners_home_2018.pdf",
+     "page": 6
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 40
+    },
+    {
+     "source": "cdph_wildfire_smoke_guidance_2022.pdf",
+     "page": 38
+    },
+    {
+     "source": "epa_guide_air_cleaners_home_2018.pdf",
+     "page": 7
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 41
+    }
+   ]
+  },
+  {
+   "id": "aq_barriers",
+   "driver": "air_quality",
+   "group": "",
+   "query": "planting trees and building sound walls along freeways to block pollution",
+   "relevant": [
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 12
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 34
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 35
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 36
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 37
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 39
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 38
+    }
+   ]
+  },
+  {
+   "id": "aq_siting",
+   "driver": "air_quality",
+   "group": "",
+   "query": "keeping new homes and schools away from high-traffic roads",
+   "relevant": [
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 5
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 16
+    },
+    {
+     "source": "carb_roadway_exposure_technical_advisory_2017.pdf",
+     "page": 19
+    }
+   ]
+  },
+  {
+   "id": "aq_lep",
+   "driver": "air_quality",
+   "group": "limited_english",
+   "query": "telling non-English speakers about air pollution risks",
+   "relevant": [
+    {
+     "source": "hhs_language_access_checklist.pdf",
+     "page": 1
+    },
+    {
+     "source": "hhs_language_access_checklist.pdf",
+     "page": 2
+    }
+   ]
+  },
+  {
+   "id": "acc_rides",
+   "driver": "healthcare_access",
+   "group": "no_vehicle",
+   "query": "free rides to doctor appointments for Medi-Cal members",
+   "relevant": [
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 5
+    },
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 6
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 8
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 9
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 10
+    }
+   ]
+  },
+  {
+   "id": "acc_wheelchair",
+   "driver": "healthcare_access",
+   "group": "disability",
+   "query": "wheelchair van or stretcher transport to medical care",
+   "relevant": [
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 3
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 4
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 5
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 7
+    },
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 2
+    },
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 3
+    },
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 4
+    }
+   ]
+  },
+  {
+   "id": "acc_pharmacy",
+   "driver": "healthcare_access",
+   "group": "age_65_plus",
+   "query": "rides to the pharmacy to pick up prescriptions",
+   "relevant": [
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 2
+    },
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 5
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 3
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 8
+    }
+   ]
+  },
+  {
+   "id": "acc_interpreters",
+   "driver": "healthcare_access",
+   "group": "limited_english",
+   "query": "interpreters for patients who speak limited English",
+   "relevant": [
+    {
+     "source": "hhs_language_access_checklist.pdf",
+     "page": 1
+    },
+    {
+     "source": "hhs_language_access_checklist.pdf",
+     "page": 2
+    }
+   ]
+  },
+  {
+   "id": "acc_street_med",
+   "driver": "healthcare_access",
+   "group": "",
+   "query": "mobile clinics and street medicine for people experiencing homelessness",
+   "relevant": [
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 80
+    },
+    {
+     "source": "la_county_heat_action_plan_2026.pdf",
+     "page": 101
+    },
+    {
+     "source": "ca_extreme_heat_action_plan_2026.pdf",
+     "page": 47
+    }
+   ]
+  },
+  {
+   "id": "acc_deaf_blind",
+   "driver": "healthcare_access",
+   "group": "disability",
+   "query": "communicating with deaf or blind residents",
+   "relevant": [
+    {
+     "source": "hhs_language_access_checklist.pdf",
+     "page": 1
+    },
+    {
+     "source": "hhs_language_access_checklist.pdf",
+     "page": 2
+    }
+   ]
+  },
+  {
+   "id": "acc_request_ride",
+   "driver": "healthcare_access",
+   "group": "",
+   "query": "how to request a medical ride and appeal if the health plan denies it",
+   "relevant": [
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 5
+    },
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 6
+    },
+    {
+     "source": "drc_medi_cal_transportation_fact_sheet.pdf",
+     "page": 9
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 6
+    },
+    {
+     "source": "dhcs_apl_22_008_nemt_nmt_2022.pdf",
+     "page": 10
+    }
+   ]
+  },
+  {
+   "id": "neg_telehealth",
+   "driver": "healthcare_access",
+   "group": "",
+   "query": "telehealth and phone visits for people far from hospitals",
+   "relevant": []
+  },
+  {
+   "id": "neg_uninsured",
+   "driver": "healthcare_access",
+   "group": "uninsured",
+   "query": "free or low-cost clinics for residents without health insurance",
+   "relevant": []
+  },
+  {
+   "id": "neg_water",
+   "driver": "",
+   "group": "",
+   "query": "residential water rates and billing disputes",
+   "relevant": []
+  },
+  {
+   "id": "neg_quake",
+   "driver": "",
+   "group": "",
+   "query": "earthquake retrofit requirements for apartment buildings",
+   "relevant": []
+  },
+  {
+   "id": "neg_lunch",
+   "driver": "",
+   "group": "",
+   "query": "school lunch nutrition standards",
+   "relevant": []
+  },
+  {
+   "id": "neg_tax",
+   "driver": "",
+   "group": "",
+   "query": "appealing a property tax assessment",
+   "relevant": []
+  },
+  {
+   "id": "neg_dogs",
+   "driver": "",
+   "group": "",
+   "query": "dog licensing and animal shelter hours",
+   "relevant": []
+  }
+ ]
+}

@@ -230,6 +230,30 @@ def test_uncertain_group_is_noted_in_data_gaps():
     assert any("young children" in g for g in b.data_gaps)
 
 
+def test_group_pieces_use_group_queries_when_set():
+    class RecordingRetriever(FakeRetriever):
+        def __init__(self):
+            self.queries = []
+
+        def retrieve(self, query, top_k):
+            self.queries.append(query)
+            return super().retrieve(query, top_k)
+
+    config = {
+        "rag": {
+            **CONFIG["rag"],
+            "group_queries": {"air_quality": "protect {group} from air"},
+        }
+    }
+    retriever = RecordingRetriever()
+    gen = PlanBriefingGenerator(config, retriever=retriever, client=FakeClient())
+    gen.generate(_group_tract("a", ["air_quality"], [OLDER]))
+    gen.generate(_group_tract("b", ["heat"], [OLDER]))
+    assert f"protect {OLDER} from air" in retriever.queries
+    assert f"heat for {OLDER}" in retriever.queries  # no group query: driver template
+    assert "air for vulnerable residents" in retriever.queries  # driver plan unchanged
+
+
 def test_default_group_gets_no_group_actions():
     client = FakeClient()
     gen = _generator(client)
@@ -299,3 +323,19 @@ def test_group_gaps_are_written_by_code():
     # A group with actions adds no gap line
     b = _generator(FakeClient()).generate(_group_tract("b", ["heat"], [OLDER]))
     assert not any("older adults" in g for g in b.data_gaps)
+
+
+def test_plan_keeps_at_most_five_actions():
+    class ManyPlanActions(FakeClient):
+        def parse(self, **kwargs):
+            self.calls += 1
+            draft = ActionPlanDraft(
+                recommended_actions=[
+                    Action(action=f"Step {i}.", excerpt_ids=["E1"]) for i in range(8)
+                ],
+                data_gaps=[],
+            )
+            return SimpleNamespace(stop_reason="end_turn", parsed_output=draft)
+
+    b = _generator(ManyPlanActions()).generate(_tract("a", ["heat"]))
+    assert [a["action"] for a in b.actions] == [f"Step {i}." for i in range(5)]
