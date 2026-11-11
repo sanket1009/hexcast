@@ -192,7 +192,8 @@ def test_load_units_and_live_plan(tmp_path):
 def _cached_generator(tmp_path):
     def plan(drivers, action):
         return {
-            "key": f"{'+'.join(drivers)}|vulnerable residents",
+            "key": f"CRITICAL|{'+'.join(drivers)}|vulnerable residents",
+            "urgency": "CRITICAL",
             "drivers": drivers,
             "groups": ["vulnerable residents"],
             "actions": [{"action": action, "citations": ["plan.pdf, p. 1"]}],

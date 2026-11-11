@@ -130,6 +130,8 @@ def load_units(plans_path: Path, groups_path: Path) -> dict[str, Unit]:
         if line.strip():
             p = json.loads(line)
             key = "plan:" + "+".join(sorted(p["drivers"]))
+            if key in units:  # plans per urgency (Phase 5.1): one per drivers is enough
+                continue
             units[key] = Unit(
                 "plan",
                 key,

@@ -8,6 +8,10 @@ One scorer per rule, all free (no model calls):
     no_system_talk      no mention of the pipeline, model, scoring or z-scores
     no_jargon           no technical terms a non-technical reader would stumble on
     reading_grade       Flesch-Kincaid grade of the whole briefing (target < 12)
+    on_driver_actions   no action is about a hazard the tract does not have
+                        (Phase 5.1: access plans carried extreme-heat actions)
+    concrete_actions    share of actions that do not open with a vague verb
+                        (encourage, tell, advise, promote, share, consider)
 
 "Uses only the given numbers" is checked in faithfulness.py (numbers_match_data).
 """
@@ -47,6 +51,26 @@ JARGON_TERMS = re.compile(
 
 READING_GRADE_TARGET = 12.0
 
+# Phase 5.1 rules in PLAN_SYSTEM_PROMPT. Hazard words only: healthcare access
+# has no hazard vocabulary, and general words such as "cool" or "filter" also
+# appear in on-driver actions.
+HAZARD_TERMS = {
+    "heat": re.compile(
+        r"\b(extreme heat|heat ?waves?|heat[- ]related|heat risks?|heat illness|"
+        r"heat safety|cooling cent(er|re)s?|hot weather|during heat)\b",
+        re.IGNORECASE,
+    ),
+    "air_quality": re.compile(
+        r"\b(pm2\.5|particles?|particulate|air pollution|air quality|smoke|"
+        r"air filt\w*|air purifiers?|air cleaners?)\b",
+        re.IGNORECASE,
+    ),
+}
+VAGUE_LEAD = re.compile(
+    r"^\s*(encourage|tell|advise|promote|share|consider|raise awareness|remind|urge)\b",
+    re.IGNORECASE,
+)
+
 
 def no_source_named(case: EvalCase) -> Score:
     b = case.briefing
@@ -72,11 +96,38 @@ def reading_grade(case: EvalCase) -> Score:
     return Score(round(grade, 1), note)
 
 
+def on_driver_actions(case: EvalCase) -> Score:
+    """1.0 when no action names a hazard outside the tract's drivers."""
+    off = sorted(
+        {
+            hazard
+            for a in case.briefing.actions
+            for hazard, pattern in HAZARD_TERMS.items()
+            if hazard not in case.tract.drivers and pattern.search(a["action"])
+        }
+    )
+    return Score(0.0, f"actions about {', '.join(off)}") if off else Score(1.0, "")
+
+
+def concrete_actions(case: EvalCase) -> Score:
+    """Share of actions that do not open with a vague verb (1.0 when none do)."""
+    actions = [a["action"] for a in case.briefing.actions]
+    if not actions:
+        return Score(1.0, "")
+    vague = [a for a in actions if VAGUE_LEAD.match(a)]
+    return Score(
+        round(1 - len(vague) / len(actions), 3),
+        f"{len(vague)} vague: {vague[0][:60]}" if vague else "",
+    )
+
+
 SCORERS = {
     "no_source_named": no_source_named,
     "no_system_talk": no_system_talk,
     "no_jargon": no_jargon,
     "reading_grade": reading_grade,
+    "on_driver_actions": on_driver_actions,
+    "concrete_actions": concrete_actions,
 }
 
 
