@@ -21,6 +21,12 @@ def test_chunks_collapse_to_pages_with_best_distance():
     assert a1.unique_pages(chunks) == [(("a.pdf", 1), 0.20), (("b.pdf", 3), 0.30)]
 
 
+def test_pages_keep_ranking_order_not_distance_order():
+    # A reranker put the farther chunk first; scoring must keep that order
+    chunks = [("b.pdf", 3, 0.40), ("a.pdf", 1, 0.20), ("b.pdf", 3, 0.35)]
+    assert a1.unique_pages(chunks) == [(("b.pdf", 3), 0.35), (("a.pdf", 1), 0.20)]
+
+
 def test_recall_mrr_ndcg_on_a_known_ranking():
     pages = [("x.pdf", 9), ("a.pdf", 2), ("a.pdf", 1)]
     assert a1.recall_at_k(pages, REL, 1) == 0.0

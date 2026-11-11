@@ -70,13 +70,18 @@ def load_gold(path: str | Path) -> list[GoldQuery]:
 
 
 def unique_pages(chunks: list[tuple[str, int, float]]) -> Ranked:
-    """Collapse ranked chunks (source, page, distance) to pages, best distance first."""
+    """Collapse ranked chunks (source, page, distance) to pages.
+
+    Pages keep the order of their first chunk (the ranking: embedding order,
+    or reranker order when one is used) and the best distance of any of
+    their chunks (what the cutoff tests).
+    """
     best: dict[Page, float] = {}
     for source, page, distance in chunks:
         key = (source, page)
         if key not in best or distance < best[key]:
             best[key] = distance
-    return sorted(best.items(), key=lambda item: item[1])
+    return list(best.items())
 
 
 def within(ranked: Ranked, cutoff: float) -> list[Page]:

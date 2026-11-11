@@ -14,6 +14,10 @@ Options:
                   Chroma collection (built from the PDFs on first use), so the
                   production store is untouched. Query/document prompts come
                   from rag.embedding_prompts.
+    --reranker MODEL
+                  cross-encoder that reorders the top 30 candidates (e.g.
+                  cross-encoder/ettin-reranker-150m-v1). The distance cutoff
+                  still decides what is kept; the reranker sets the order.
     --instruction TEXT
                   custom query task instruction (Qwen3-Embedding format
                   "Instruct: TEXT\nQuery:"). Only queries change, so the
@@ -66,6 +70,7 @@ def main() -> int:
     parser.add_argument("--no-mlflow", action="store_true")
     parser.add_argument("--embedding-model")
     parser.add_argument("--instruction")
+    parser.add_argument("--reranker")
     args = parser.parse_args()
 
     config = load_config()
@@ -77,6 +82,9 @@ def main() -> int:
         rag["embedding_model"] = args.embedding_model
         slug = args.embedding_model.split("/")[-1].lower()
         rag["collection_suffix"] = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
+
+    if args.reranker:
+        rag["reranker"] = {**(rag.get("reranker") or {}), "model": args.reranker}
 
     if args.instruction:  # Qwen3-Embedding query format; documents unchanged
         prompts = rag.setdefault("embedding_prompts", {})
@@ -104,7 +112,10 @@ def main() -> int:
     curve = a1.sweep(gold, rankings, CUTOFFS)
     drivers = a1.by_driver(rows)
 
-    _print_report(rag["embedding_model"], cutoff, metrics, rows, curve, drivers)
+    label = rag["embedding_model"].split("/")[-1]
+    if (rag.get("reranker") or {}).get("model"):
+        label += " + " + rag["reranker"]["model"].split("/")[-1]
+    _print_report(label, cutoff, metrics, rows, curve, drivers)
 
     stamp = datetime.now(UTC).isoformat(timespec="seconds")
     manifest = {
@@ -117,6 +128,7 @@ def main() -> int:
         "query_encoding": json.dumps(encode_kwargs(rag, "query")),
         "document_encoding": json.dumps(encode_kwargs(rag, "document")),
         "collection": collection_name(rag, config["full_fips"]),
+        "reranker": (rag.get("reranker") or {}).get("model") or "",
         "chunk_size": rag["chunk_size"],
         "chunk_overlap": rag["chunk_overlap"],
         "git_sha": _git("rev-parse", "--short", "HEAD"),
@@ -220,7 +232,14 @@ def _log_to_mlflow(config, manifest, metrics, curve, rows, plot) -> str:
     mlflow.set_tracking_uri(Path(tracking_uri).resolve().as_uri())
     mlflow.set_experiment(EXPERIMENT)
     with mlflow.start_run(
-        run_name=f"retrieval A1 {manifest['embedding_model'].split('/')[-1]}"
+        run_name=" ".join(
+            ["retrieval A1", manifest["embedding_model"].split("/")[-1]]
+            + (
+                [f"+ {manifest['reranker'].split('/')[-1]}"]
+                if manifest["reranker"]
+                else []
+            )
+        )
     ) as run:
         mlflow.log_params(manifest)
         mlflow.log_metrics(

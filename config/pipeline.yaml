@@ -92,6 +92,12 @@ rag:
   chroma_persist_path: "chromadb/chroma_store"
   chroma_collection_name: "chbindex_policy_docs"
   top_k_chunks: 3
+  # Second stage (retriever.py): a cross-encoder reorders the candidates that
+  # pass max_distance. null = embedding order. Chosen with A1 (eval_retrieval.py
+  # --reranker MODEL).
+  reranker:
+    model: null
+    candidates: 30
   # From the A1 sweep (2026-11-11, Qwen3 + task instruction, steps of 0.02): 0.48
   # is the lowest cutoff with no empty real query and all 7 negatives rejected
   # (recall@3 0.385, MRR 0.698), 0.023 below the closest negative (0.503). An

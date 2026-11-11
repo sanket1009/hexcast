@@ -11,6 +11,9 @@ Design:
     - Class, so the embedding model and collection load once and are
       reused across many queries (briefing.py runs one per tract)
     - Distance cutoff: return fewer chunks rather than irrelevant ones
+    - Optional reranker (rag.reranker.model): a cross-encoder reads query and
+      chunk together and reorders the candidates that passed the cutoff. The
+      embedding cutoff stays the relevance gate; the reranker only reorders.
     - Typed results: briefing.py never touches Chroma's raw format
 
 Usage:
@@ -22,10 +25,10 @@ Usage:
         print(c.citation, c.distance)
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from src.rag.vectorstore import encode_kwargs, get_collection
 from src.utils.logger import get_logger
@@ -47,6 +50,7 @@ class RetrievedChunk:
     source: str
     page: int
     distance: float
+    rerank_score: float | None = None  # set when a reranker ordered the list
 
     @property
     def citation(self) -> str:
@@ -74,6 +78,13 @@ class PolicyRetriever:
         self.model = SentenceTransformer(rag_cfg["embedding_model"])
         self.query_args = encode_kwargs(rag_cfg, "query")
 
+        rerank_cfg = rag_cfg.get("reranker") or {}
+        self.reranker = None
+        self.rerank_candidates = rerank_cfg.get("candidates", 30)
+        if rerank_cfg.get("model"):
+            logger.info(f"Loading reranker: {rerank_cfg['model']}")
+            self.reranker = CrossEncoder(rerank_cfg["model"])
+
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         """
         Return up to top_k chunks closest in meaning to the query.
@@ -85,7 +96,10 @@ class PolicyRetriever:
             raise ValueError("Query text is empty.")
 
         # Chroma cannot return more results than the collection holds
-        k = min(top_k or self.top_k, self.collection.count())
+        want = top_k or self.top_k
+        # With a reranker, fetch a wider pool so it has something to reorder
+        pool = max(want, self.rerank_candidates) if self.reranker else want
+        k = min(pool, self.collection.count())
         if k == 0:
             logger.warning(f"Collection '{self.collection.name}' is empty.")
             return []
@@ -127,4 +141,19 @@ class PolicyRetriever:
                 f"max_distance={self.max_distance}"
             )
 
-        return kept
+        if self.reranker and kept:
+            kept = self._rerank(query, kept)
+        return kept[:want]
+
+    def _rerank(self, query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Order chunks by cross-encoder relevance, highest first.
+
+        The reranker gets the plain query: the embedding task instruction is a
+        convention of the embedding model, not part of the question.
+        """
+        scores = self.reranker.predict([(query, c.text) for c in chunks])
+        scored = [
+            replace(c, rerank_score=float(s))
+            for c, s in zip(chunks, scores, strict=True)
+        ]
+        return sorted(scored, key=lambda c: c.rerank_score, reverse=True)
