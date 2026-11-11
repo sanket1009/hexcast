@@ -1,10 +1,15 @@
 """
 validate_index.py
 =================
-B1 index validation: weight sensitivity for one week and week-to-week
-stability across all stored weeks. Free: no model calls.
+B1 index validation: weight sensitivity for one week, week-to-week
+stability across all stored weeks, and an external benchmark of the
+year-average burden against CalEnviroScreen 5.0 and CDC PLACES.
+Free: no model calls.
 
     PYTHONPATH=. python3 scripts/validate_index.py --week 2026-06-22
+
+First run (or after an OEHHA update): add --refresh-ces to pull
+CalEnviroScreen into the warehouse. --no-benchmark skips step 3.
 
 Reads stored compound_scores (stability) and recomputes the week's signals
 with the configured PM2.5 window (sensitivity). Writes
@@ -21,7 +26,11 @@ from pathlib import Path
 
 import yaml
 
-from src.evals.index_validation import temporal_stability, weight_sensitivity
+from src.evals.index_validation import (
+    external_benchmark,
+    temporal_stability,
+    weight_sensitivity,
+)
 from src.spatial.compound_score import _impute_missing, _load_signals
 from src.utils.bigquery import read_query
 
@@ -40,6 +49,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--week", required=True)
     parser.add_argument("--no-mlflow", action="store_true")
+    parser.add_argument("--refresh-ces", action="store_true")
+    parser.add_argument("--no-benchmark", action="store_true")
     args = parser.parse_args()
 
     config = load_config()
@@ -61,12 +72,18 @@ def main() -> int:
     )
     per_week, stability = temporal_stability(scores)
 
+    # 3. External benchmark of the year average
+    benchmark, comparisons = {}, None
+    if not args.no_benchmark:
+        benchmark, comparisons = run_benchmark(config, args.refresh_ces)
+
     small = sensitivity[sensitivity["weight"] != 0]
     metrics = {
         **{f"stability/{k}": v for k, v in stability.items()},
         "sensitivity/min_spearman_25pct": float(small["spearman"].min()),
         "sensitivity/min_jaccard_25pct": float(small["jaccard"].min()),
         "sensitivity/max_left_critical_25pct": int(small["left_critical"].max()),
+        **{f"benchmark/{k}": v for k, v in benchmark.items()},
     }
     manifest = {
         "week": args.week,
@@ -83,6 +100,14 @@ def main() -> int:
         print(f"  {k:24} {round(v, 3)}")
     print("\nLeast stable weeks")
     print(per_week.nsmallest(5, "retained").round(3).to_string(index=False))
+    if comparisons is not None:
+        print(f"\nExternal benchmark, year average ({benchmark['n_tracts']} tracts)")
+        print(comparisons[["comparison", "spearman"]].round(3).to_string(index=False))
+        print(
+            f"  top 10% shared with CES: {benchmark['top_decile_overlap']} "
+            f"of {benchmark['top_decile_size']} "
+            f"({benchmark['top_decile_overlap_no_access']} without access)"
+        )
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"index_{args.week}_{manifest['evaluated_at'][:19].replace(':', '')}"
@@ -94,6 +119,7 @@ def main() -> int:
                 "metrics": metrics,
                 "sensitivity": sensitivity.to_dict(orient="records"),
                 "per_week": per_week.astype({"week_start_date": str}).to_dict(orient="records"),
+                "benchmark": None if comparisons is None else comparisons.to_dict(orient="records"),
             },
             indent=2,
         )
@@ -110,8 +136,51 @@ def main() -> int:
             mlflow.log_metrics(metrics)
             mlflow.log_table(sensitivity, artifact_file="sensitivity.json")
             mlflow.log_table(per_week.astype({"week_start_date": str}), artifact_file="per_week.json")
+            if comparisons is not None:
+                mlflow.log_table(comparisons, artifact_file="benchmark.json")
         print(f"MLflow run: {run.info.run_id} (experiment {EXPERIMENT})")
     return 0
+
+
+def run_benchmark(config: dict, refresh: bool):
+    """Year-average burden vs CalEnviroScreen (pulled on refresh) and CDC PLACES."""
+    if refresh:
+        from src.ingestion.calenviroscreen import pull_calenviroscreen
+
+        pull_calenviroscreen(config)
+
+    fips = config["full_fips"]
+    annual = read_query(
+        f"""
+        WITH s AS (
+            SELECT geoid,
+                AVG(raw_burden) AS burden,
+                AVG(pm25_z) AS pm25_z,
+                AVG(lst_z) AS lst_z,
+                AVG(access_z) AS access_z
+            FROM {{dataset}}.compound_scores
+            WHERE city_fips = '{fips}'
+            GROUP BY geoid
+        ),
+        p AS (
+            SELECT geoid, AVG(pm25_kriged) AS pm25_ugm3
+            FROM {{dataset}}.pm25_kriged
+            WHERE city_fips = '{fips}'
+            GROUP BY geoid
+        )
+        SELECT s.*, p.pm25_ugm3 FROM s JOIN p USING (geoid)
+        """,
+        config,
+    )
+    ces = read_query(f"SELECT * FROM {{dataset}}.calenviroscreen WHERE city_fips = '{fips}'", config)
+    places = read_query(
+        f"SELECT * FROM {{dataset}}.cdc_places_health WHERE city_fips = '{fips}'", config
+    )
+    return external_benchmark(
+        annual,
+        ces.drop(columns=["city_fips", "ces_version"]),
+        places.drop(columns=["city_fips"]),
+    )
 
 
 def _git(*args: str) -> str:

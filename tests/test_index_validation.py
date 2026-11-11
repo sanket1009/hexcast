@@ -81,3 +81,69 @@ def test_temporal_stability_counts_retained_and_persistent():
 def test_temporal_stability_needs_two_weeks():
     with pytest.raises(ValueError):
         iv.temporal_stability(_weekly({"2026-01-05": {"a"}}))
+
+
+# ---------------------------------------------------------------------------
+# External benchmark
+# ---------------------------------------------------------------------------
+
+
+def _benchmark_inputs(n=200, seed=5):
+    rng = np.random.default_rng(seed)
+    pm, heat, access = rng.normal(size=(3, n))
+    geoid = [f"t{i:03d}" for i in range(n)]
+    annual = pd.DataFrame(
+        {
+            "geoid": geoid,
+            "pm25_z": pm,
+            "lst_z": heat,
+            "access_z": access,
+            "burden": pm + heat + access,
+            "pm25_ugm3": 10 + pm,
+        }
+    )
+    ces = pd.DataFrame(
+        {
+            "geoid": geoid,
+            "ces_score": pm + heat,  # CES sees pollution and heat, not access
+            "pollution_score": pm,
+            "pop_char_score": heat,
+            "pm25_ces": 10.5 + pm,
+        }
+    )
+    return annual, ces
+
+
+def test_benchmark_traces_disagreement_to_access():
+    annual, ces = _benchmark_inputs()
+    metrics, table = iv.external_benchmark(annual, ces)
+    assert metrics["spearman_ces_no_access"] == pytest.approx(1.0)
+    assert metrics["spearman_ces"] < 0.9
+    assert metrics["top_decile_overlap_no_access"] == metrics["top_decile_size"]
+    assert metrics["top_decile_overlap"] < metrics["top_decile_size"]
+    assert metrics["pm25_mae_ugm3"] == pytest.approx(0.5)
+    assert len(table) == 8
+
+
+def test_benchmark_skips_tracts_without_a_ces_score():
+    annual, ces = _benchmark_inputs()
+    ces.loc[:9, "ces_score"] = np.nan
+    metrics, _ = iv.external_benchmark(annual, ces)
+    assert metrics["n_tracts"] == 190
+
+
+def test_benchmark_adds_places_outcomes():
+    annual, ces = _benchmark_inputs()
+    places = pd.DataFrame(
+        {
+            "geoid": annual["geoid"],
+            "asthma_pct": annual["burden"],
+            "heart_disease_pct": 1.0 * np.arange(len(annual)),
+            "copd_pct": 1.0,
+            "diabetes_pct": 2.0,
+        }
+    )
+    _, table = iv.external_benchmark(annual, ces, places)
+    asthma = table.set_index("theirs").loc["asthma_pct", "spearman"]
+    assert asthma == pytest.approx(1.0)
+    assert len(table) == 12
