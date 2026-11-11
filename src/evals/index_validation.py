@@ -29,6 +29,8 @@ cannot plan outreach around a list that changes by half every week.
      and population parts, and CDC PLACES outcomes
    - top_decile_overlap: tracts in the top 10% of both indexes
    - the same two numbers with access removed (PM2.5 + heat only)
+   - with a vulnerability component (Phase 3): hazards only vs CES, and
+     vulnerability vs CES population characteristics
    - CES asthma and cardiovascular ED visit rates (observed outcomes).
      CDC PLACES asthma is a model-based estimate driven by demographics;
      in LA it tracks the Asian share of a tract at -0.63, so it is kept
@@ -164,8 +166,9 @@ def external_benchmark(
     """
     Compare year-average burden with CalEnviroScreen and CDC PLACES.
 
-    annual: geoid, burden, pm25_z, lst_z, access_z (year means of the
-        stored signed components) and pm25_ugm3 (year mean Kriged PM2.5)
+    annual: geoid, burden, pm25_z, lst_z, access_z, optional
+        vulnerability_z (year means of the stored signed components) and
+        pm25_ugm3 (year mean Kriged PM2.5)
     ces: calenviroscreen table (ces_score, pollution_score,
         pop_char_score, pm25_ces)
     places: optional cdc_places_health table
@@ -186,6 +189,22 @@ def external_benchmark(
         ("lst_z", "ces_score", "heat component vs CES overall"),
         ("access_z", "ces_score", "access component vs CES overall"),
     ]
+    has_vulnerability = "vulnerability_z" in d
+    if has_vulnerability:
+        d["burden_hazards_only"] = d["burden"] - d["vulnerability_z"]
+        pairs += [
+            (
+                "burden_hazards_only",
+                "ces_score",
+                "hazards only (no vulnerability) vs overall",
+            ),
+            (
+                "vulnerability_z",
+                "pop_char_score",
+                "vulnerability component vs CES population characteristics",
+            ),
+            ("vulnerability_z", "ces_score", "vulnerability component vs CES overall"),
+        ]
     for col, label in [
         ("asthma_ed_rate", "asthma ED visits"),
         ("cardio_ed_rate", "cardiovascular ED visits"),
@@ -233,6 +252,15 @@ def external_benchmark(
             d.loc[d["geoid"].isin(ours_top), "access_z"].mean()
         ),
     }
+    if has_vulnerability:
+        hazards_top = top_decile(d["burden_hazards_only"], d["geoid"])
+        metrics["spearman_ces_hazards_only"] = float(
+            rho[("burden_hazards_only", "ces_score")]
+        )
+        metrics["spearman_vulnerability_pop_char"] = float(
+            rho[("vulnerability_z", "pop_char_score")]
+        )
+        metrics["top_decile_overlap_hazards_only"] = len(ces_top & hazards_top)
     return metrics, table
 
 

@@ -79,6 +79,22 @@ def test_fit_variogram_recovers_known_parameters_and_respects_nugget_floor():
 # ---------------------------------------------------------------------------
 
 
+_ORIGINAL_LOAD_VULNERABILITY = compound_score._load_vulnerability
+
+
+@pytest.fixture(autouse=True)
+def _no_acs_query(monkeypatch):
+    # _load_signals also reads acs_vulnerability. Tests that fake read_query
+    # for the weekly signals get a neutral vulnerability instead.
+    monkeypatch.setattr(
+        compound_score,
+        "_load_vulnerability",
+        lambda config: pd.DataFrame(
+            {"geoid": [f"t{i:03d}" for i in range(200)], "vulnerability": 0.0}
+        ),
+    )
+
+
 def _signals(n=100, seed=1):
     rng = np.random.default_rng(seed)
     return pd.DataFrame(
@@ -87,8 +103,14 @@ def _signals(n=100, seed=1):
             "pm25_kriged": rng.normal(9, 0.5, n),
             "lst_zscore": rng.normal(0, 1, n),
             "access_score_er": rng.uniform(0.5, 3.0, n),
+            "vulnerability": rng.normal(0, 1, n),
         }
     )
+
+
+def _weekly(n):
+    """What the weekly signals query returns: no vulnerability column."""
+    return _signals(n).drop(columns="vulnerability")
 
 
 def test_better_access_lowers_burden():
@@ -157,7 +179,7 @@ def test_signals_join_healthcare_access_for_the_same_week(monkeypatch):
 
     def read_query(query, config):
         queries.append(query)
-        return _signals(5).assign(pm25_weeks=1)
+        return _weekly(5).assign(pm25_weeks=1)
 
     monkeypatch.setattr(compound_score, "read_query", read_query)
     compound_score._load_signals({"full_fips": "06037"}, "2025-08-04")
@@ -178,7 +200,7 @@ def test_pm25_is_averaged_over_the_window(monkeypatch):
 
     def read_query(query, config):
         queries.append(query)
-        return _signals(5).assign(pm25_weeks=4)
+        return _weekly(5).assign(pm25_weeks=4)
 
     monkeypatch.setattr(compound_score, "read_query", read_query)
     out = compound_score._load_signals(
@@ -193,6 +215,7 @@ def test_pm25_is_averaged_over_the_window(monkeypatch):
         "pm25_kriged",
         "lst_zscore",
         "access_score_er",
+        "vulnerability",
     ]
 
 
@@ -202,7 +225,7 @@ def test_short_pm25_window_logs_a_warning(monkeypatch):
     monkeypatch.setattr(
         compound_score,
         "read_query",
-        lambda q, c: _signals(5).assign(pm25_weeks=2),
+        lambda q, c: _weekly(5).assign(pm25_weeks=2),
     )
     monkeypatch.setattr(compound_score.logger, "warning", warnings.append)
     compound_score._load_signals(
@@ -222,7 +245,7 @@ def test_latest_good_week_skips_cloudy_weeks():
 def test_cloudy_week_reuses_last_good_week_lst(monkeypatch):
     # 2025-12-01 had LST for 9% of tracts: the median fill gave the rest an
     # average heat score. The week should reuse 2025-11-17 instead.
-    week = _signals(10).assign(pm25_weeks=4)
+    week = _weekly(10).assign(pm25_weeks=4)
     week.loc[1:, "lst_zscore"] = np.nan
     earlier = pd.DataFrame(
         {"geoid": week["geoid"], "lst_zscore": np.arange(10, dtype=float)}
@@ -255,7 +278,7 @@ def test_well_covered_week_keeps_its_own_lst(monkeypatch):
 
     def read_query(query, config):
         queries.append(query)
-        return _signals(10).assign(pm25_weeks=4)
+        return _weekly(10).assign(pm25_weeks=4)
 
     monkeypatch.setattr(compound_score, "read_query", read_query)
     out = compound_score._load_signals(
@@ -266,7 +289,7 @@ def test_well_covered_week_keeps_its_own_lst(monkeypatch):
 
 
 def test_no_good_week_falls_back_to_median_with_a_warning(monkeypatch):
-    week = _signals(10).assign(pm25_weeks=4)
+    week = _weekly(10).assign(pm25_weeks=4)
     week.loc[1:, "lst_zscore"] = np.nan
     warnings = []
 
@@ -282,6 +305,65 @@ def test_no_good_week_falls_back_to_median_with_a_warning(monkeypatch):
     )
     assert out["lst_zscore"].isna().sum() == 9
     assert any("city median" in w for w in warnings)
+
+
+def test_shrinkage_moves_noisy_shares_more():
+    # Real spread: shares 10 and 30 (variance 100). Tract a is precise
+    # (SE 1), tract d is noisy (SE 20): d moves most of the way to the mean.
+    pct = pd.Series([10.0, 30.0, 10.0, 30.0])
+    moe = pd.Series([1.0, 1.0, 1.0, 20.0]) * compound_score.Z90
+    out = compound_score.shrink_share(pct, moe)
+    real = 100 - (1 + 1 + 1 + 400) / 4  # observed variance - mean SE^2 = -0.75 -> 0
+    assert real < 0
+    # No real spread left after removing noise: every share goes to the mean
+    assert np.allclose(out, 20.0)
+
+    pct = pd.Series([0.0, 40.0, 0.0, 40.0, 20.0])
+    moe = pd.Series([2.0, 2.0, 2.0, 2.0, 30.0]) * compound_score.Z90
+    out = compound_score.shrink_share(pct, moe)
+    mean, real = 20.0, pct.var(ddof=0) - (4 * 4 + 900) / 5
+    b_precise = real / (real + 4)
+    assert out[0] == pytest.approx(mean + b_precise * (0 - mean))
+    assert abs(out[0] - pct[0]) < 1  # precise share barely moves
+
+
+def test_shrinkage_keeps_small_precise_shares():
+    # 1% uninsured measured to +/- 0.5 points: a CV rule (CV 0.30) would be
+    # borderline, shrinkage leaves it near 1%
+    pct = pd.Series([1.0, 5.0, 9.0, 13.0, 17.0])
+    moe = pd.Series([0.5, 1.0, 1.0, 1.0, 1.0])
+    out = compound_score.shrink_share(pct, moe)
+    assert out[0] == pytest.approx(1.0, abs=0.05)
+
+
+def test_vulnerability_score_averages_indicator_z_scores():
+    n = 6
+    acs = pd.DataFrame({"geoid": [f"g{i}" for i in range(n)]})
+    for name in compound_score.VULNERABILITY_INDICATORS:
+        acs[f"{name}_pct"] = np.arange(n, dtype=float)  # same order everywhere
+        acs[f"{name}_moe"] = 0.0  # exact: no shrinkage
+    acs.loc[5, [f"{x}_pct" for x in compound_score.VULNERABILITY_INDICATORS]] = np.nan
+    out = compound_score.vulnerability_score(acs).set_index("geoid")["vulnerability"]
+    assert out.iloc[:5].is_monotonic_increasing
+    assert np.isnan(out["g5"])  # no residents: left for the median fill
+    # One missing indicator counts as average (z = 0), not as a gap
+    acs.loc[0, "uninsured_pct"] = np.nan
+    one_missing = compound_score.vulnerability_score(acs).set_index("geoid")
+    assert one_missing.loc["g0", "vulnerability"] > out["g0"]
+
+
+def test_vulnerability_enters_with_a_positive_sign():
+    df = _signals()
+    df.loc[0, "vulnerability"] = 5.0
+    out = compound_score._build_composite(df, PERCENTILES).set_index("geoid")
+    assert out.loc["t000", "vulnerability_z"] > 0
+    assert out.loc["t000", "burden_class"] in {"HIGH", "CRITICAL"}
+
+
+def test_missing_acs_table_is_reported(monkeypatch):
+    monkeypatch.setattr(compound_score, "read_query", lambda q, c: pd.DataFrame())
+    with pytest.raises(ValueError, match="acs_vulnerability"):
+        _ORIGINAL_LOAD_VULNERABILITY({"full_fips": "06037"})
 
 
 # ---------------------------------------------------------------------------

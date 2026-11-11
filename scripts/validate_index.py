@@ -145,6 +145,11 @@ def main() -> int:
             f"of {benchmark['top_decile_size']} "
             f"({benchmark['top_decile_overlap_no_access']} without access)"
         )
+        if "top_decile_overlap_hazards_only" in benchmark:
+            print(
+                f"  hazards only (no vulnerability): "
+                f"{benchmark['top_decile_overlap_hazards_only']} shared"
+            )
 
     print(f"\nGi* hotspot stability across {hotspot_summary['n_weeks']} weeks")
     for k, v in hotspot_summary.items():
@@ -227,7 +232,8 @@ def run_benchmark(config: dict, refresh: bool):
                 AVG(raw_burden) AS burden,
                 AVG(pm25_z) AS pm25_z,
                 AVG(lst_z) AS lst_z,
-                AVG(access_z) AS access_z
+                AVG(access_z) AS access_z,
+                AVG(vulnerability_z) AS vulnerability_z
             FROM {{dataset}}.compound_scores
             WHERE city_fips = '{fips}'
             GROUP BY geoid
