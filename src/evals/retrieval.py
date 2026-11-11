@@ -121,9 +121,11 @@ def score_query(q: GoldQuery, ranked: Ranked, cutoff: float) -> dict[str, Any]:
     }
     if q.is_negative:
         row["rejected"] = not pages
-        row["closest"] = round(ranked[0][1], 3) if ranked else None
+        # min, not ranked[0]: with a reranker the list is not in distance order
+        row["closest"] = round(min(d for _, d in ranked), 3) if ranked else None
         return row
-    first_hit = next((round(d, 3) for page, d in ranked if page in q.relevant), None)
+    relevant_d = [d for page, d in ranked if page in q.relevant]
+    first_hit = round(min(relevant_d), 3) if relevant_d else None
     row |= {
         f"recall@{K_BRIEFING}": recall_at_k(pages, q.relevant, K_BRIEFING),
         f"recall@{K_POOL}": recall_at_k(pages, q.relevant, K_POOL),
@@ -182,5 +184,40 @@ def by_driver(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
             ),
             "empty_rate": round(fmean(r["empty"] for r in part), 4),
             "n": len(part),
+        }
+    return out
+
+
+def paired_comparison(
+    rows_a: list[dict[str, Any]],
+    rows_b: list[dict[str, Any]],
+    metrics: tuple[str, ...] = (f"recall@{K_BRIEFING}", "rr", f"ndcg@{K_POOL}"),
+    n_boot: int = 10_000,
+    seed: int = 0,
+) -> dict[str, dict[str, float]]:
+    """Per-query paired comparison of two A1 runs on the same gold set (B minus A).
+
+    For each metric: mean difference, a bootstrap 95% CI over queries, and
+    win/loss/tie counts. With ~23 positives, a difference whose CI spans 0 is
+    not evidence that B ranks better than A.
+    """
+    import random
+
+    a = {r["id"]: r for r in rows_a if not r["negative"]}
+    b = {r["id"]: r for r in rows_b if not r["negative"]}
+    ids = sorted(a.keys() & b.keys())
+    rng = random.Random(seed)
+    out: dict[str, dict[str, float]] = {}
+    for m in metrics:
+        diffs = [b[i][m] - a[i][m] for i in ids]
+        boots = sorted(fmean(rng.choice(diffs) for _ in diffs) for _ in range(n_boot))
+        out[m] = {
+            "mean_diff": round(fmean(diffs), 4),
+            "ci_low": round(boots[int(0.025 * n_boot)], 4),
+            "ci_high": round(boots[int(0.975 * n_boot) - 1], 4),
+            "wins": sum(d > 1e-9 for d in diffs),
+            "losses": sum(d < -1e-9 for d in diffs),
+            "ties": sum(abs(d) <= 1e-9 for d in diffs),
+            "n": len(ids),
         }
     return out

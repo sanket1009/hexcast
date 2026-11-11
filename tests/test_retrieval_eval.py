@@ -105,3 +105,23 @@ def test_gold_set_file_is_well_formed():
     for q in gold:
         for source, page in q.relevant:
             assert source.endswith(".pdf") and page >= 1
+
+
+def test_paired_comparison_counts_wins_and_brackets_the_mean():
+    a = [
+        {"id": f"q{i}", "negative": False, "recall@3": 0.0, "rr": 0.5, "ndcg@10": 0.5}
+        for i in range(10)
+    ]
+    b = [{**r, "recall@3": 1.0 if i < 6 else 0.0} for i, r in enumerate(a)]
+    out = a1.paired_comparison(a, b, n_boot=2000)
+    r3 = out["recall@3"]
+    assert (r3["wins"], r3["losses"], r3["ties"]) == (6, 0, 4)
+    assert r3["ci_low"] <= r3["mean_diff"] == 0.6 <= r3["ci_high"]
+    assert out["rr"]["mean_diff"] == 0.0 and out["rr"]["ties"] == 10
+
+
+def test_negative_diagnostics_use_the_minimum_distance():
+    # reranked order: farther page first
+    ranked = [(("z.pdf", 1), 0.58), (("y.pdf", 2), 0.51)]
+    row = a1.score_query(_q("n", relevant=()), ranked, cutoff=0.48)
+    assert row["closest"] == 0.51 and row["rejected"]
