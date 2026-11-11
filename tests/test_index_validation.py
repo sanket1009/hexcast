@@ -45,7 +45,9 @@ def test_sensitivity_is_identity_at_weight_one():
 
 
 def test_dropping_a_component_changes_more_than_a_small_change():
-    out = iv.weight_sensitivity(_signals(), PERCENTILES).set_index(["component", "weight"])
+    out = iv.weight_sensitivity(_signals(), PERCENTILES).set_index(
+        ["component", "weight"]
+    )
     for col in compound_score.SIGNED_SIGNALS:
         assert out.loc[(col, 0.0), "jaccard"] < out.loc[(col, 1.25), "jaccard"]
 
@@ -71,7 +73,7 @@ def test_temporal_stability_counts_retained_and_persistent():
     )
     per_week, summary = iv.temporal_stability(scores)
     assert per_week["retained"].tolist() == [0.5, 1.0]
-    assert summary["ever_critical"] == 3       # a, b, c
+    assert summary["ever_critical"] == 3  # a, b, c
     assert summary["persistent_critical"] == 2  # a (3 of 3), c (2 of 3)
     assert summary["n_weeks"] == 3
 

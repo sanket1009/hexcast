@@ -67,7 +67,9 @@ def weight_sensitivity(
                 {
                     "component": col,
                     "weight": factor,
-                    "spearman": float(spearmanr(base["raw_burden"], out["raw_burden"])[0]),
+                    "spearman": float(
+                        spearmanr(base["raw_burden"], out["raw_burden"])[0]
+                    ),
                     "jaccard": jaccard(base_critical, crit),
                     "left_critical": len(base_critical - crit),
                 }
@@ -88,9 +90,7 @@ def temporal_stability(scores: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, fl
     if len(weeks) < 2:
         raise ValueError("Temporal stability needs at least two weeks of scores")
 
-    crit = {
-        w: critical_set(scores[scores["week_start_date"] == w]) for w in weeks
-    }
+    crit = {w: critical_set(scores[scores["week_start_date"] == w]) for w in weeks}
     burden = scores.pivot(index="geoid", columns="week_start_date", values="raw_burden")
 
     rows = []
@@ -99,7 +99,9 @@ def temporal_stability(scores: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, fl
         rows.append(
             {
                 "week_start_date": pd.Timestamp(cur).date(),
-                "retained": len(crit[prev] & crit[cur]) / len(crit[prev]) if crit[prev] else np.nan,
+                "retained": len(crit[prev] & crit[cur]) / len(crit[prev])
+                if crit[prev]
+                else np.nan,
                 "spearman_prev": float(spearmanr(both[prev], both[cur])[0]),
                 "n_critical": len(crit[cur]),
             }

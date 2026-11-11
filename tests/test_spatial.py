@@ -187,7 +187,12 @@ def test_pm25_is_averaged_over_the_window(monkeypatch):
     assert "AVG(pm25_kriged)" in joined
     assert "BETWEEN '2026-06-01' AND '2026-06-22'" in joined
     # The helper column does not leak into the signals
-    assert list(out.columns) == ["geoid", "pm25_kriged", "lst_zscore", "access_score_er"]
+    assert list(out.columns) == [
+        "geoid",
+        "pm25_kriged",
+        "lst_zscore",
+        "access_score_er",
+    ]
 
 
 def test_short_pm25_window_logs_a_warning(monkeypatch):
