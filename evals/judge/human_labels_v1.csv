@@ -1,21 +1,21 @@
 item_id,groundedness,tract_specificity,actionability,urgency_tone,clarity,unsafe_advice,notes
-J03,,,,,,,
-J05,,,,,,,
-J12,,,,,,,
-J13,,,,,,,
-J14,,,,,,,
-J19,,,,,,,
-J20,,,,,,,
-J22,,,,,,,
-J23,,,,,,,
-J27,,,,,,,
-J28,,,,,,,
-J34,,,,,,,
-J36,,,,,,,
-J39,,,,,,,
-J41,,,,,,,
-J42,,,,,,,
-J46,,,,,,,
-J50,,,,,,,
-J53,,,,,,,
-J58,,,,,,,
+J03,4,5,3,5,5,no,Overall good 
+J05,3,3,3,5,5,No,Over all good
+J12,5,4,3,4,4,No,Overall good 
+J13,5,5,4,5,5,no,Overall good 
+J14,5,5,5,5,5,No,Over all good
+J19,4,4,3,4,5,no,Overall good 
+J20,4,5,3,3,5,no,Overall good 
+J22,5,4,3,3,5,No,Over all good
+J23,5,4,3,3,5,No,Over all good
+J27,5,5,3,3,5,No,Over all good
+J28,5,5,2,3,5,No,Over all good
+J34,5,3,3,4,5,No,Over all good
+J36,5,3,4,4,5,No,Over all good
+J39,5,5,4,4,5,No,Over all good
+J41,4,4,3,3,5,no,Overall good 
+J42,4,5,4,5,5,no,Overall good 
+J46,4,3,3,4,5,no,Overall good 
+J50,4,2,3,3,5,no,Overall good 
+J53,4,5,3,5,5,no,Overall good 
+J58,4,5,4,5,5,no,Overall good 
