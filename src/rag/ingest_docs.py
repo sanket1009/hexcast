@@ -28,7 +28,7 @@ from typing import Any
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
-from src.rag.vectorstore import encode_prompt
+from src.rag.vectorstore import encode_kwargs
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -112,7 +112,7 @@ def ingest_documents(config: dict[str, Any]) -> list[dict[str, Any]]:
     embeddings = _embed_texts(
         [c["text"] for c in chunks],
         model_name=rag_cfg["embedding_model"],
-        prompt_name=encode_prompt(rag_cfg, "document"),
+        encode_args=encode_kwargs(rag_cfg, "document"),
     )
 
     for chunk, embedding in zip(chunks, embeddings, strict=False):
@@ -235,7 +235,7 @@ def _make_chunk_id(city_fips: str, source: str, page: int, index: int) -> str:
 
 
 def _embed_texts(
-    texts: list[str], model_name: str, prompt_name: str | None = None
+    texts: list[str], model_name: str, encode_args: dict[str, str] | None = None
 ) -> list[list[float]]:
     """
     Embed texts with a local sentence-transformers model.
@@ -249,7 +249,7 @@ def _embed_texts(
 
     embeddings = model.encode(
         texts,
-        prompt_name=prompt_name,
+        **(encode_args or {}),
         batch_size=32,
         normalize_embeddings=True,
         show_progress_bar=True,

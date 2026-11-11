@@ -80,19 +80,25 @@ rag:
   # negative rejection 1.0. MiniLM at 0.50: 0.259, 0.478, 0.714, and no MiniLM
   # cutoff rejected every negative with recall@3 above 0.19.
   embedding_model: "Qwen/Qwen3-Embedding-0.6B"
-  # sentence-transformers prompt_name per model and role (vectorstore.encode_prompt).
-  # Unlisted models encode plain text. Qwen3-Embedding: instruction on queries
-  # only (its card reports a 1-5% retrieval drop without it).
+  # Query/document encoding per model (vectorstore.encode_kwargs): <role> = a
+  # prompt stored with the model, <role>_text = literal prompt. Unlisted models
+  # encode plain text. Qwen3-Embedding embeds documents plain and prefixes queries
+  # with a task instruction. A1 (2026-11-11), instruction vs the model's generic
+  # "query" prompt: recall@3 ceiling 0.345 -> 0.399, MRR 0.633 -> 0.723, and
+  # negatives pushed further out (closest 0.461 -> 0.503).
   embedding_prompts:
-    "Qwen/Qwen3-Embedding-0.6B": {query: "query"}
+    "Qwen/Qwen3-Embedding-0.6B":
+      query_text: "Instruct: Given a question about protecting a group of residents, retrieve policy passages that recommend specific actions, programs, or services for that group\nQuery:"
   chroma_persist_path: "chromadb/chroma_store"
   chroma_collection_name: "chbindex_policy_docs"
   top_k_chunks: 3
-  # Qwen3 cutoff from the A1 sweep (2026-11-11): 0.45 rejects all 7 negatives
-  # (closest 0.461) and leaves 3 of 23 real queries empty; 0.50 empties none but
-  # leaks an off-topic page. An empty slot gets the "No guidance" line; a leaked
-  # page becomes a wrong excerpt. Distances are model-specific: re-sweep on change.
-  max_distance: 0.45
+  # From the A1 sweep (2026-11-11, Qwen3 + task instruction, steps of 0.02): 0.48
+  # is the lowest cutoff with no empty real query and all 7 negatives rejected
+  # (recall@3 0.385, MRR 0.698), 0.023 below the closest negative (0.503). An
+  # empty slot gets the "No guidance" line; a leaked page becomes a wrong
+  # excerpt, so we stay clear of the edge. Model- and instruction-specific:
+  # re-sweep (scripts/eval_retrieval.py) after changing either.
+  max_distance: 0.48
   chunk_size: 800
   chunk_overlap: 150
   chroma_dir: data/chroma

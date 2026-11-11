@@ -133,15 +133,21 @@ def collection_name(rag_cfg: dict[str, Any], city_fips: str) -> str:
     return f"{base}_{suffix}" if suffix else base
 
 
-def encode_prompt(rag_cfg: dict[str, Any], role: str) -> str | None:
-    """sentence-transformers prompt_name for 'query' or 'document' text.
+def encode_kwargs(rag_cfg: dict[str, Any], role: str) -> dict[str, str]:
+    """sentence-transformers encode() arguments for 'query' or 'document' text.
 
-    Instruction-tuned models (e.g. Qwen3-Embedding) embed queries with an
-    instruction prefix and documents without one. Models not listed in
-    rag.embedding_prompts encode plain text, as before.
+    Per model in rag.embedding_prompts:
+        <role>: name of a prompt stored with the model (prompt_name)
+        <role>_text: literal prompt text, e.g. a custom task instruction
+    Instruction-tuned models (e.g. Qwen3-Embedding) prefix queries with a task
+    instruction and embed documents plain. Unlisted models encode plain text.
     """
     prompts = rag_cfg.get("embedding_prompts", {}).get(rag_cfg["embedding_model"], {})
-    return prompts.get(role)
+    if text := prompts.get(f"{role}_text"):
+        return {"prompt": text}
+    if name := prompts.get(role):
+        return {"prompt_name": name}
+    return {}
 
 
 # ---------------------------------------------------------------------------

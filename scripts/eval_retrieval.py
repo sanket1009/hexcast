@@ -14,6 +14,10 @@ Options:
                   Chroma collection (built from the PDFs on first use), so the
                   production store is untouched. Query/document prompts come
                   from rag.embedding_prompts.
+    --instruction TEXT
+                  custom query task instruction (Qwen3-Embedding format
+                  "Instruct: TEXT\nQuery:"). Only queries change, so the
+                  stored document vectors are reused.
 
 Writes evals/results/retrieval_<time>.json (metrics, sweep, per query) and
 evals/results/retrieval_sweep_<time>.png (recall vs negative rejection).
@@ -40,10 +44,10 @@ from src.rag.retriever import PolicyRetriever  # noqa: E402
 from src.rag.vectorstore import (  # noqa: E402
     build_vectorstore,
     collection_name,
-    encode_prompt,
+    encode_kwargs,
 )
 
-CUTOFFS = [round(0.30 + 0.05 * i, 2) for i in range(9)]  # 0.30 .. 0.70
+CUTOFFS = [round(0.30 + 0.02 * i, 2) for i in range(16)]  # 0.30 .. 0.60
 CHUNKS_PER_QUERY = 30  # enough chunks to fill 10 unique pages
 EXPERIMENT = "chbindex-evals"
 
@@ -61,6 +65,7 @@ def main() -> int:
     parser.add_argument("--cutoff", type=float)
     parser.add_argument("--no-mlflow", action="store_true")
     parser.add_argument("--embedding-model")
+    parser.add_argument("--instruction")
     args = parser.parse_args()
 
     config = load_config()
@@ -72,6 +77,13 @@ def main() -> int:
         rag["embedding_model"] = args.embedding_model
         slug = args.embedding_model.split("/")[-1].lower()
         rag["collection_suffix"] = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
+
+    if args.instruction:  # Qwen3-Embedding query format; documents unchanged
+        prompts = rag.setdefault("embedding_prompts", {})
+        prompts[rag["embedding_model"]] = {
+            **prompts.get(rag["embedding_model"], {}),
+            "query_text": f"Instruct: {args.instruction}\nQuery:",
+        }
 
     try:
         retriever = PolicyRetriever(config)
@@ -102,8 +114,8 @@ def main() -> int:
         "n_negatives": sum(q.is_negative for q in gold),
         "cutoff": cutoff,
         "embedding_model": rag["embedding_model"],
-        "query_prompt": encode_prompt(rag, "query") or "",
-        "document_prompt": encode_prompt(rag, "document") or "",
+        "query_encoding": json.dumps(encode_kwargs(rag, "query")),
+        "document_encoding": json.dumps(encode_kwargs(rag, "document")),
         "collection": collection_name(rag, config["full_fips"]),
         "chunk_size": rag["chunk_size"],
         "chunk_overlap": rag["chunk_overlap"],

@@ -27,7 +27,7 @@ from typing import Any
 
 from sentence_transformers import SentenceTransformer
 
-from src.rag.vectorstore import encode_prompt, get_collection
+from src.rag.vectorstore import encode_kwargs, get_collection
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,7 +72,7 @@ class PolicyRetriever:
 
         logger.info(f"Loading embedding model: {rag_cfg['embedding_model']}")
         self.model = SentenceTransformer(rag_cfg["embedding_model"])
-        self.query_prompt = encode_prompt(rag_cfg, "query")
+        self.query_args = encode_kwargs(rag_cfg, "query")
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         """
@@ -91,7 +91,7 @@ class PolicyRetriever:
             return []
 
         query_vec = self.model.encode(
-            query, prompt_name=self.query_prompt, normalize_embeddings=True
+            query, **self.query_args, normalize_embeddings=True
         ).tolist()
 
         result = self.collection.query(
