@@ -111,19 +111,23 @@ def check_groups(retriever: PolicyRetriever, rag: dict) -> None:
     empty = []
     print("\n=== driver x group (what each group piece gets)")
     group_queries = rag.get("group_queries", {})
+    diversity: dict[str, tuple[int, int]] = {}
     for driver, driver_template in rag["driver_queries"].items():
         template = group_queries.get(driver, driver_template)
         print(f"\n--- {driver}\n{template}")
+        pages: list[tuple[str, int]] = []
         for key, label in GROUP_LABELS.items():
             candidates = retriever.retrieve(
                 template.format(group=label), top_k=CANDIDATES_PER_DRIVER
             )
             chosen = pick_excerpts([candidates], per_driver)
             wins.update(c.source for c in chosen)
+            pages += [(c.source, c.page) for c in chosen]
             if not chosen:
                 empty.append(f"{driver}|{key}")
             got = "; ".join(f"{c.citation} ({c.distance:.3f})" for c in chosen)
             print(f"  {key:16s} {got or 'NOTHING within cutoff'}")
+        diversity[driver] = (len(set(pages)), len(pages))
 
     total = sum(wins.values())
     print(
@@ -135,6 +139,11 @@ def check_groups(retriever: PolicyRetriever, rag: dict) -> None:
         f"Empty group pieces: {len(empty)}"
         + (f" ({', '.join(empty)})" if empty else "")
     )
+    # Distinct pages across a driver's group pieces: 3 means every group got
+    # the same excerpts, so the group actions cannot differ.
+    print("Group diversity (distinct pages / excerpt slots):")
+    for driver, (distinct, slots) in diversity.items():
+        print(f"  {driver:18s} {distinct:3d} / {slots}")
 
 
 if __name__ == "__main__":

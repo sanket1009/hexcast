@@ -75,7 +75,11 @@ ml:
   ab_test_significance_threshold: 0.05
 
 rag:
-  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  # A1 gold set (evals/datasets/retrieval_gold_v1.json, 2026-11-11): Qwen3-Embedding-0.6B
+  # (Apache 2.0) vs all-MiniLM-L6-v2. Qwen3 at 0.45: recall@3 0.334, MRR 0.581,
+  # negative rejection 1.0. MiniLM at 0.50: 0.259, 0.478, 0.714, and no MiniLM
+  # cutoff rejected every negative with recall@3 above 0.19.
+  embedding_model: "Qwen/Qwen3-Embedding-0.6B"
   # sentence-transformers prompt_name per model and role (vectorstore.encode_prompt).
   # Unlisted models encode plain text. Qwen3-Embedding: instruction on queries
   # only (its card reports a 1-5% retrieval drop without it).
@@ -84,7 +88,11 @@ rag:
   chroma_persist_path: "chromadb/chroma_store"
   chroma_collection_name: "chbindex_policy_docs"
   top_k_chunks: 3
-  max_distance: 0.5  # calibrated 2026-10-24: on-topic 0.26-0.35, negatives 0.69+
+  # Qwen3 cutoff from the A1 sweep (2026-11-11): 0.45 rejects all 7 negatives
+  # (closest 0.461) and leaves 3 of 23 real queries empty; 0.50 empties none but
+  # leaks an off-topic page. An empty slot gets the "No guidance" line; a leaked
+  # page becomes a wrong excerpt. Distances are model-specific: re-sweep on change.
+  max_distance: 0.45
   chunk_size: 800
   chunk_overlap: 150
   chroma_dir: data/chroma
@@ -113,14 +121,15 @@ rag:
     # plan was heat actions.
     healthcare_access: "actions for health services to reach {group} with limited access to hospitals, such as mobile clinics, street medicine outreach, telehealth, and transportation to medical care"
   # Group pieces (action_plans.py) use these when set, else driver_queries.
-  # The driver templates are ~30 fixed words, so a 3-4 word group label barely
-  # moved the query: 20 of 21 air quality group slots went to the CARB roadway
-  # advisory and 6 of 7 access groups to one heat plan page. Short, group-first
-  # wording lets the group decide what is retrieved. Heat groups already got
-  # specific pages, so heat keeps its driver template.
+  # A fixed example tail ("such as ...") outweighs a 3-4 word group label, so
+  # every group of a driver retrieved the same pages (Qwen3, 2026-11-11: heat 6
+  # of 7 groups identical, air quality 7 of 7). Group-led wording with no tail
+  # lets the group decide; build_corpus.py --groups reports distinct pages per
+  # driver (group diversity) to check it.
   group_queries:
-    air_quality: "how to protect {group} from fine particle air pollution at home, school, and child care, such as portable air cleaners and better air filters"
-    healthcare_access: "how {group} can get to medical care, such as free rides to medical appointments, language help, and clinics close to home"
+    heat: "keeping {group} safe during extreme heat"
+    air_quality: "protecting {group} from fine particle air pollution"
+    healthcare_access: "helping {group} get to medical care"
 
 logging:
   level: "INFO"
