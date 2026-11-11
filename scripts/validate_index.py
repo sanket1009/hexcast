@@ -2,8 +2,9 @@
 validate_index.py
 =================
 B1 index validation: weight sensitivity for one week, week-to-week
-stability across all stored weeks, and an external benchmark of the
-year-average burden against CalEnviroScreen 5.0 and CDC PLACES.
+stability across all stored weeks, an external benchmark of the
+year-average burden against CalEnviroScreen 5.0 and CDC PLACES, Gi*
+hotspot stability, and Kriging quality over the year.
 Free: no model calls.
 
     PYTHONPATH=. python3 scripts/validate_index.py --week 2026-06-22
@@ -28,6 +29,8 @@ import yaml
 
 from src.evals.index_validation import (
     external_benchmark,
+    hotspot_stability,
+    kriging_year,
     temporal_stability,
     weight_sensitivity,
 )
@@ -72,6 +75,38 @@ def main() -> int:
     )
     per_week, stability = temporal_stability(scores)
 
+    # 4. Gi* hotspot stability across all stored weeks
+    hotspots = read_query(
+        f"""
+        SELECT h.week_start_date, h.geoid, h.gi_star_zscore, h.hotspot_class,
+            s.raw_burden
+        FROM {{dataset}}.hotspot_detection h
+        JOIN {{dataset}}.compound_scores s
+            USING (geoid, week_start_date, city_fips)
+        WHERE h.city_fips = '{config["full_fips"]}'
+        """,
+        config,
+    )
+    hotspot_weeks, hotspot_summary = hotspot_stability(hotspots)
+
+    # 5. Kriging quality per week (one row per week)
+    kriged = read_query(
+        f"""
+        SELECT week_start_date,
+            ANY_VALUE(cv_mae) AS cv_mae,
+            ANY_VALUE(cv_r2) AS cv_r2,
+            ANY_VALUE(n_monitors) AS n_monitors,
+            ANY_VALUE(variogram_nugget) AS variogram_nugget,
+            ANY_VALUE(variogram_psill) AS variogram_psill,
+            ANY_VALUE(variogram_range_m) AS variogram_range_m
+        FROM {{dataset}}.pm25_kriged
+        WHERE city_fips = '{config["full_fips"]}'
+        GROUP BY week_start_date
+        """,
+        config,
+    )
+    kriging_weeks, kriging_summary = kriging_year(kriged)
+
     # 3. External benchmark of the year average
     benchmark, comparisons = {}, None
     if not args.no_benchmark:
@@ -84,6 +119,8 @@ def main() -> int:
         "sensitivity/min_jaccard_25pct": float(small["jaccard"].min()),
         "sensitivity/max_left_critical_25pct": int(small["left_critical"].max()),
         **{f"benchmark/{k}": v for k, v in benchmark.items()},
+        **{f"hotspots/{k}": v for k, v in hotspot_summary.items()},
+        **{f"kriging/{k}": v for k, v in kriging_summary.items()},
     }
     manifest = {
         "week": args.week,
@@ -109,6 +146,17 @@ def main() -> int:
             f"({benchmark['top_decile_overlap_no_access']} without access)"
         )
 
+    print(f"\nGi* hotspot stability across {hotspot_summary['n_weeks']} weeks")
+    for k, v in hotspot_summary.items():
+        print(f"  {k:28} {round(v, 3)}")
+    print("\nKriging over the year")
+    for k, v in kriging_summary.items():
+        print(f"  {k:28} {round(v, 3)}")
+    weak = kriging_weeks[kriging_weeks["weak"]]
+    cols = ["week_start_date", "cv_mae", "cv_r2", "variogram_nugget", "variogram_psill"]
+    print("Weak Kriging weeks")
+    print(weak[cols].round(2).to_string(index=False))
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"index_{args.week}_{manifest['evaluated_at'][:19].replace(':', '')}"
     path = RESULTS_DIR / f"{stem}.json"
@@ -118,8 +166,18 @@ def main() -> int:
                 "manifest": manifest,
                 "metrics": metrics,
                 "sensitivity": sensitivity.to_dict(orient="records"),
-                "per_week": per_week.astype({"week_start_date": str}).to_dict(orient="records"),
-                "benchmark": None if comparisons is None else comparisons.to_dict(orient="records"),
+                "per_week": per_week.astype({"week_start_date": str}).to_dict(
+                    orient="records"
+                ),
+                "benchmark": None
+                if comparisons is None
+                else comparisons.to_dict(orient="records"),
+                "hotspot_weeks": hotspot_weeks.astype({"week_start_date": str}).to_dict(
+                    orient="records"
+                ),
+                "kriging_weeks": kriging_weeks.astype({"week_start_date": str}).to_dict(
+                    orient="records"
+                ),
             },
             indent=2,
         )
@@ -129,15 +187,27 @@ def main() -> int:
     if not args.no_mlflow:
         import mlflow
 
-        mlflow.set_tracking_uri(Path(config["ml"]["mlflow_tracking_uri"]).resolve().as_uri())
+        mlflow.set_tracking_uri(
+            Path(config["ml"]["mlflow_tracking_uri"]).resolve().as_uri()
+        )
         mlflow.set_experiment(EXPERIMENT)
         with mlflow.start_run(run_name=f"index {args.week} pm25 {window}wk") as run:
             mlflow.log_params(manifest)
             mlflow.log_metrics(metrics)
             mlflow.log_table(sensitivity, artifact_file="sensitivity.json")
-            mlflow.log_table(per_week.astype({"week_start_date": str}), artifact_file="per_week.json")
+            mlflow.log_table(
+                per_week.astype({"week_start_date": str}), artifact_file="per_week.json"
+            )
             if comparisons is not None:
                 mlflow.log_table(comparisons, artifact_file="benchmark.json")
+            mlflow.log_table(
+                hotspot_weeks.astype({"week_start_date": str}),
+                artifact_file="hotspot_weeks.json",
+            )
+            mlflow.log_table(
+                kriging_weeks.astype({"week_start_date": str}),
+                artifact_file="kriging_weeks.json",
+            )
         print(f"MLflow run: {run.info.run_id} (experiment {EXPERIMENT})")
     return 0
 
@@ -172,9 +242,12 @@ def run_benchmark(config: dict, refresh: bool):
         """,
         config,
     )
-    ces = read_query(f"SELECT * FROM {{dataset}}.calenviroscreen WHERE city_fips = '{fips}'", config)
+    ces = read_query(
+        f"SELECT * FROM {{dataset}}.calenviroscreen WHERE city_fips = '{fips}'", config
+    )
     places = read_query(
-        f"SELECT * FROM {{dataset}}.cdc_places_health WHERE city_fips = '{fips}'", config
+        f"SELECT * FROM {{dataset}}.cdc_places_health WHERE city_fips = '{fips}'",
+        config,
     )
     return external_benchmark(
         annual,

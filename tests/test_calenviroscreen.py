@@ -1,5 +1,6 @@
 """Tests for the CalEnviroScreen pull. Fake ArcGIS pages, no network."""
 
+import pandas as pd
 import pytest
 
 from src.ingestion import calenviroscreen as ces
@@ -15,6 +16,8 @@ def _row(tract, score=40.0):
         "Pollution_Pctl": 80.0,
         "PopCharScore": 5.0,
         "PM2_5": 11.2,
+        "asthma": 55.0,
+        "Cardiovascular": -999.0,
     }
 
 
@@ -22,6 +25,8 @@ def test_geoid_gets_its_leading_zero_back():
     df = ces._process([_row(6037101110)], "06037")
     assert df.loc[0, "geoid"] == "06037101110"
     assert df.loc[0, "pm25_ces"] == 11.2
+    assert df.loc[0, "asthma_ed_rate"] == 55.0
+    assert pd.isna(df.loc[0, "cardio_ed_rate"])  # negative = missing
 
 
 def test_negative_scores_are_missing():

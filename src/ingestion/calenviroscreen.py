@@ -54,6 +54,10 @@ FIELDS = {
     "Pollution_Pctl": "pollution_percentile",
     "PopCharScore": "pop_char_score",
     "PM2_5": "pm25_ces",
+    # Age-adjusted ED visits per 10,000 (observed, from state hospital data).
+    # Used instead of CDC PLACES asthma, a model-based self-report estimate.
+    "asthma": "asthma_ed_rate",
+    "Cardiovascular": "cardio_ed_rate",
 }
 
 

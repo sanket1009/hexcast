@@ -16,6 +16,12 @@ Method: signed z-score composite
      with weekly values only 59% of CRITICAL tracts stayed CRITICAL the
      next week; with a 4-week mean, 81%. The pm25_kriged table keeps the
      weekly values for drift checks.
+     LST comes from a 32-day cloud-free composite. In cloudy weeks it can
+     cover only a few tracts (2025-11-24: 223 of 2,493). If fewer than
+     gee.min_coverage of city tracts have LST, the week reuses the LST
+     z-scores of the latest week within LST_FALLBACK_MAX_WEEKS that
+     passes. Otherwise the median fill below would give ~90% of tracts
+     an average heat score and rank heat on the few tracts that remain.
   2. Impute missing values with the city median. A median is neutral:
      it adds nothing to the burden. Affects water-only tracts (LST) and
      unscored tracts (access: unreachable or no residents).
@@ -61,6 +67,9 @@ from src.utils.bigquery import REPLACE_PARTITION, read_query, write_dataframe
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# How far back to look for a week with enough LST coverage
+LST_FALLBACK_MAX_WEEKS = 8
 
 # Column in the input table -> sign of its contribution to burden.
 # +1: higher value means more burden. -1: higher value means less burden.
@@ -237,7 +246,87 @@ def _load_signals(
             f"PM2.5 window: {weeks_used} of {pm25_window_weeks} weeks available "
             f"from {start_str} to {week_str}"
         )
-    return df.drop(columns="pm25_weeks")
+    df = df.drop(columns="pm25_weeks")
+    return _fill_low_coverage_lst(df, config, week_str)
+
+
+def _latest_good_week(
+    counts: pd.DataFrame,
+    n_tracts: int,
+    min_coverage: float,
+) -> str | None:
+    """
+    Latest week whose LST covers at least min_coverage of city tracts.
+
+    counts: columns week (ISO date string) and n (tracts with LST).
+    Returns None when no week passes.
+    """
+    good = counts[counts["n"] / n_tracts >= min_coverage]
+    if good.empty:
+        return None
+    return str(good["week"].max())
+
+
+def _fill_low_coverage_lst(
+    df: pd.DataFrame,
+    config: dict[str, Any],
+    week_str: str,
+) -> pd.DataFrame:
+    """
+    Reuse an earlier week's LST z-scores when this week's composite is
+    mostly cloud gaps.
+
+    Carries the z-score, not the temperature: the z-score is a tract's
+    position within its own week, so it does not bring the earlier week's
+    seasonal level along.
+    """
+    min_coverage = float(config.get("gee", {}).get("min_coverage", 0.8))
+    coverage = float(df["lst_zscore"].notna().mean())
+    if coverage >= min_coverage:
+        return df
+
+    full_fips = config["full_fips"]
+    start = (
+        date.fromisoformat(week_str) - timedelta(weeks=LST_FALLBACK_MAX_WEEKS)
+    ).isoformat()
+    counts = read_query(
+        f"""
+        SELECT
+            CAST(week_start_date AS STRING) AS week,
+            COUNT(lst_zscore) AS n
+        FROM {{dataset}}.lst_tract_stats
+        WHERE
+            city_fips = '{full_fips}'
+            AND week_start_date >= '{start}'
+            AND week_start_date < '{week_str}'
+        GROUP BY week_start_date
+        """,
+        config,
+    )
+    source = _latest_good_week(counts, len(df), min_coverage)
+    if source is None:
+        logger.warning(
+            f"LST covers {coverage:.0%} of tracts for {week_str} and no week in "
+            f"the previous {LST_FALLBACK_MAX_WEEKS} passes {min_coverage:.0%}; "
+            f"missing tracts get the city median"
+        )
+        return df
+
+    prev = read_query(
+        f"""
+        SELECT geoid, lst_zscore
+        FROM {{dataset}}.lst_tract_stats
+        WHERE city_fips = '{full_fips}' AND week_start_date = '{source}'
+        """,
+        config,
+    )
+    logger.warning(
+        f"LST covers {coverage:.0%} of tracts for {week_str} "
+        f"(min {min_coverage:.0%}); using LST z-scores from {source}"
+    )
+    df = df.copy()
+    df["lst_zscore"] = df["geoid"].map(prev.set_index("geoid")["lst_zscore"])
+    return df
 
 
 def _impute_missing(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:

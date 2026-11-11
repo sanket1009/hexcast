@@ -147,3 +147,74 @@ def test_benchmark_adds_places_outcomes():
     asthma = table.set_index("theirs").loc["asthma_pct", "spearman"]
     assert asthma == pytest.approx(1.0)
     assert len(table) == 12
+
+
+def test_benchmark_adds_ces_ed_visit_rates():
+    annual, ces = _benchmark_inputs()
+    ces["asthma_ed_rate"] = annual["pm25_z"].values
+    ces["cardio_ed_rate"] = annual["lst_z"].values
+    _, table = iv.external_benchmark(annual, ces)
+    rho = table.set_index(["ours", "theirs"])["spearman"]
+    assert rho[("pm25_z", "asthma_ed_rate")] == pytest.approx(1.0)
+    assert rho[("lst_z", "cardio_ed_rate")] == pytest.approx(1.0)
+    assert len(table) == 14
+
+
+# ---------------------------------------------------------------------------
+# Hotspot stability and Kriging over the year
+# ---------------------------------------------------------------------------
+
+
+def _hotspot_weeks():
+    # Three weeks, 10 tracts. Week 2 keeps 2 of week 1's 3 hotspots.
+    rows = []
+    hot = {"2026-01-05": {"a", "b", "c"}, "2026-01-12": {"a", "b"}, "2026-01-19": set()}
+    for i, (week, hs) in enumerate(hot.items()):
+        for j, g in enumerate("abcdefghij"):
+            rows.append(
+                {
+                    "week_start_date": week,
+                    "geoid": g,
+                    "gi_star_zscore": 3.0 - 0.3 * j + 0.01 * i,
+                    "hotspot_class": "HOTSPOT_95" if g in hs else "NOT_SIGNIFICANT",
+                    "raw_burden": float(j) ** (1 + i),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_hotspot_stability_counts_retained_and_ranks():
+    per_week, summary = iv.hotspot_stability(_hotspot_weeks(), top_n=3)
+    assert per_week["retained"].tolist()[0] == pytest.approx(2 / 3)
+    assert per_week["n_hotspots"].tolist() == [2, 0]
+    # Same z ordering every week: ranks and the top 3 do not move
+    assert summary["rank_spearman_prev_median"] == pytest.approx(1.0)
+    assert summary["top_overlap_min"] == pytest.approx(1.0)
+    assert summary["ever_hotspot"] == 3
+    assert summary["persistent_hotspot"] == 2  # a and b: 2 of 3 weeks
+
+
+def test_hotspot_stability_needs_two_weeks():
+    one = _hotspot_weeks().query("week_start_date == '2026-01-05'")
+    with pytest.raises(ValueError):
+        iv.hotspot_stability(one)
+
+
+def test_kriging_year_flags_weak_weeks():
+    k = pd.DataFrame(
+        {
+            "week_start_date": ["2025-06-23", "2025-06-30", "2025-07-07"],
+            "cv_mae": [0.6, 3.7, 1.0],
+            "cv_r2": [0.86, -0.05, 0.6],
+            "n_monitors": [21, 21, 21],
+            "variogram_nugget": [0.1, 14.5, 5.0],
+            "variogram_psill": [8.0, 13.2, 1.2],
+            "variogram_range_m": [242_450.0, 242_450.0, 106_750.0],
+        }
+    )
+    table, summary = iv.kriging_year(k)
+    assert table["weak"].tolist() == [False, True, True]
+    assert table["no_structure"].tolist() == [False, True, True]
+    assert summary["weak_weeks"] == 2
+    assert summary["range_at_bound_weeks"] == 2
+    assert summary["mae_max"] == pytest.approx(3.7)
