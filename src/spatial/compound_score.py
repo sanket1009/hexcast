@@ -5,12 +5,17 @@ Compound Climate-Health Burden Score for each census tract.
 
 The index combines three signals. Each is signed so that a higher
 contribution means more burden:
-  - PM2.5 (Kriged annual concentration)          higher = more burden
+  - PM2.5 (Kriged, mean of the last N weeks)     higher = more burden
   - LST (land surface temperature z-score)        higher = more burden
   - Healthcare access (beds per 1,000 residents)  higher = LESS burden
 
 Method: signed z-score composite
-  1. Load the three signals for the week and city.
+  1. Load the three signals for the week and city. PM2.5 is the mean
+     of the Kriged weekly values over the last pm25_window_weeks weeks
+     (city config, default 4). Weekly PM2.5 from ~21 monitors is noisy:
+     with weekly values only 59% of CRITICAL tracts stayed CRITICAL the
+     next week; with a 4-week mean, 81%. The pm25_kriged table keeps the
+     weekly values for drift checks.
   2. Impute missing values with the city median. A median is neutral:
      it adds nothing to the burden. Affects water-only tracts (LST) and
      unscored tracts (access: unreachable or no residents).
@@ -46,7 +51,7 @@ Usage:
     df = compute_compound_score(config)
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -111,7 +116,8 @@ def compute_compound_score(
     )
 
     # Step 1 — Load the three signals
-    signals_df = _load_signals(config, week_str)
+    window = int(config.get("pm25_window_weeks", 1))
+    signals_df = _load_signals(config, week_str, pm25_window_weeks=window)
     logger.info(f"Loaded signals for {len(signals_df):,} tracts")
 
     # Step 2 — Impute missing values with the city median
@@ -152,9 +158,24 @@ def compute_compound_score(
 # ---------------------------------------------------------------------------
 
 
-def _load_signals(config: dict[str, Any], week_str: str) -> pd.DataFrame:
+def _window_start(week_str: str, weeks: int) -> str:
+    """First week of a window of `weeks` weeks ending at week_str."""
+    end = date.fromisoformat(week_str)
+    return (end - timedelta(weeks=weeks - 1)).isoformat()
+
+
+def _load_signals(
+    config: dict[str, Any],
+    week_str: str,
+    pm25_window_weeks: int = 1,
+) -> pd.DataFrame:
     """
     Load PM2.5, LST z-score and healthcare access for one week.
+
+    PM2.5 is the per-tract mean of pm25_kriged over the weeks from
+    _window_start(week_str, pm25_window_weeks) to week_str. Weeks missing
+    from the table (e.g. the first weeks of the record) are skipped, and
+    the mean uses the weeks that exist.
 
     Returns
     -------
@@ -163,15 +184,31 @@ def _load_signals(config: dict[str, Any], week_str: str) -> pd.DataFrame:
         geoid, pm25_kriged, lst_zscore, access_score_er
     """
     full_fips = config["full_fips"]
+    start_str = _window_start(week_str, pm25_window_weeks)
 
     query = f"""
+        WITH pm AS (
+            SELECT
+                geoid,
+                AVG(pm25_kriged) AS pm25_kriged,
+                COUNT(*) AS pm25_weeks
+            FROM
+                {{dataset}}.pm25_kriged
+            WHERE
+                week_start_date BETWEEN '{start_str}' AND '{week_str}'
+                AND city_fips = '{full_fips}'
+            GROUP BY geoid
+        )
         SELECT
             k.geoid,
-            k.pm25_kriged,
+            pm.pm25_kriged,
+            pm.pm25_weeks,
             l.lst_zscore,
             a.access_score_er
         FROM
             {{dataset}}.pm25_kriged k
+        JOIN
+            pm ON k.geoid = pm.geoid
         LEFT JOIN
             {{dataset}}.lst_tract_stats l
             ON k.geoid = l.geoid
@@ -194,7 +231,13 @@ def _load_signals(config: dict[str, Any], week_str: str) -> pd.DataFrame:
             f"Run ingestion and spatial transform DAGs first."
         )
 
-    return df
+    weeks_used = int(df["pm25_weeks"].min())
+    if weeks_used < pm25_window_weeks:
+        logger.warning(
+            f"PM2.5 window: {weeks_used} of {pm25_window_weeks} weeks available "
+            f"from {start_str} to {week_str}"
+        )
+    return df.drop(columns="pm25_weeks")
 
 
 def _impute_missing(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -223,9 +266,17 @@ def _impute_missing(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return df, imputed_count
 
 
-def _build_composite(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+def _build_composite(
+    df: pd.DataFrame,
+    config: dict[str, Any],
+    weights: dict[str, float] | None = None,
+) -> pd.DataFrame:
     """
     Build the signed z-score composite and classify each tract.
+
+    weights: optional multiplier per signal column (default 1 each). Used
+    only by the weight sensitivity check (src/evals/index_validation.py);
+    the weekly pipeline uses equal weights.
 
     For each signal x:
         z = (x - mean) / std          across city tracts this week
@@ -252,7 +303,7 @@ def _build_composite(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
         x = df[col].astype(float).values
         std = x.std(ddof=0)
         z = (x - x.mean()) / std if std > 0 else np.zeros(len(x))
-        contribution = sign * z
+        contribution = sign * z * (weights or {}).get(col, 1.0)
         out[COMPONENT_COLUMNS[col]] = np.round(contribution, 4)
         raw += contribution
 

@@ -148,6 +148,11 @@ healthcare:
 #   elevated  -> ELEVATED, monitor
 # Percentiles are set by policy, not by the data. Tune after reviewing the first
 # real weekly distribution.
+# PM2.5 input to the index: mean of the last N weekly Kriged surfaces.
+# Weekly values from ~21 monitors made the CRITICAL list churn (59% kept
+# week to week); 4 weeks keeps 81% and matches the 32-day LST composite.
+pm25_window_weeks: 4
+
 burden_percentiles:
   elevated: 50     # top half of the city
   high_risk: 75    # top quarter
