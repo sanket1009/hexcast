@@ -25,7 +25,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Protocol
 
-from src.rag.briefing import Briefing, TractRisk
+from src.rag.briefing import Briefing, CallCapError, TractRisk
 from src.rag.briefings_table import save_briefings
 from src.utils.logger import get_logger
 
@@ -105,6 +105,12 @@ def run_week(
             try:
                 briefing = generator.generate(risk)
                 break
+            except CallCapError:
+                logger.error(
+                    f"Model call cap reached at tract {risk.geoid}; "
+                    f"{len(briefings) - len(done)} new briefings are checkpointed"
+                )
+                raise
             except (
                 Exception
             ) as exc:  # BriefingError or API errors: record, retry, move on
@@ -210,7 +216,11 @@ def write_review(
             *[f"- {k}" for k in b.key_risks],
             "",
             "Actions:",
-            *[f"- {a['action']} [{', '.join(a['citations'])}]" for a in b.actions],
+            *[
+                f"- {'(' + a['group'] + ') ' if a.get('group') else ''}"
+                f"{a['action']} [{', '.join(a['citations'])}]"
+                for a in b.actions
+            ],
             "",
             f"Data gaps: {'; '.join(b.data_gaps) if b.data_gaps else 'none'}",
             "",

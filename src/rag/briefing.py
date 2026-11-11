@@ -46,6 +46,14 @@ class BriefingError(Exception):
     """Raised when Claude returns no usable briefing (refusal or cut off)."""
 
 
+class CallCapError(RuntimeError):
+    """
+    Raised before a model call that would exceed the run's call cap. The
+    runner re-raises it instead of retrying, so the run stops with every
+    finished briefing checkpointed.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Input contract: what the pipeline hands us for each tract
 # ---------------------------------------------------------------------------
@@ -106,6 +114,8 @@ class Briefing:
     retrieved_chunk_ids: list[str]  # audit trail: everything Claude saw
     model: str
     generated_at: str
+    vulnerable_groups: list[str] = field(default_factory=list)
+    inputs: dict[str, Any] = field(default_factory=dict)  # the TractRisk used
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -247,6 +257,8 @@ class BriefingGenerator:
             retrieved_chunk_ids=[c.id for c in chunks],
             model=self.model,
             generated_at=datetime.now(UTC).isoformat(),
+            vulnerable_groups=list(tract.vulnerable_groups),
+            inputs=asdict(tract),
         )
 
     # -- helpers ------------------------------------------------------------

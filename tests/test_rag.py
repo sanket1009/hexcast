@@ -108,8 +108,25 @@ def _week(n=8):
     )
 
 
-def test_ranks_use_raw_burden_so_rounded_percentiles_do_not_tie(monkeypatch):
+def _group_ranks(n=8):
+    """No tract in any group's top quarter, except t1: older adults and no car."""
+    df = pd.DataFrame({"geoid": [f"t{i}" for i in range(n)]})
+    for key in risk_inputs.GROUP_LABELS:
+        df[f"{key}_share"] = 10.0
+        df[f"{key}_rank"] = 0.5
+    df.loc[1, ["age_65_plus_share", "age_65_plus_rank"]] = [31.2, 0.95]
+    df.loc[1, ["no_vehicle_share", "no_vehicle_rank"]] = [22.0, 0.80]
+    df.loc[1, ["disability_share", "disability_rank"]] = [18.0, 0.78]
+    return df
+
+
+def _patch_week(monkeypatch):
     monkeypatch.setattr(risk_inputs, "_load_week", lambda config, week: _week())
+    monkeypatch.setattr(risk_inputs, "_load_group_ranks", lambda config: _group_ranks())
+
+
+def test_ranks_use_raw_burden_so_rounded_percentiles_do_not_tie(monkeypatch):
+    _patch_week(monkeypatch)
     risks = {r.geoid: r for r in risk_inputs.build_tract_risks({}, "2026-06-22")}
     assert set(risks) == {"t0", "t1", "t2"}  # HIGH and CRITICAL only
     assert (risks["t0"].risk_rank, risks["t1"].risk_rank, risks["t2"].risk_rank) == (
@@ -119,3 +136,26 @@ def test_ranks_use_raw_burden_so_rounded_percentiles_do_not_tie(monkeypatch):
     )
     assert risks["t0"].urgency == "CRITICAL" and risks["t2"].urgency == "ELEVATED"
     assert risks["t0"].tract_count == 8
+
+
+def test_top_two_groups_in_the_county_top_quarter(monkeypatch):
+    _patch_week(monkeypatch)
+    risks = {r.geoid: r for r in risk_inputs.build_tract_risks({}, "2026-06-22")}
+    # t1: three groups qualify; the two highest ranks are kept, highest first
+    assert risks["t1"].vulnerable_groups == [
+        "older adults (65 and over)",
+        "households without a car",
+    ]
+    assert risks["t0"].vulnerable_groups == []  # default group later
+    ind = risks["t1"].indicators
+    assert ind["Older adults (65 and over), share of tract (%)"] == 31.2
+    assert ind["Older adults (65 and over), county median (%)"] == 10.0
+
+
+def test_drivers_are_listed_strongest_first(monkeypatch):
+    week = _week()
+    week.loc[2, ["pm25_z", "lst_z", "access_z"]] = [1.0, 3.0, 2.0]
+    monkeypatch.setattr(risk_inputs, "_load_week", lambda config, w: week)
+    monkeypatch.setattr(risk_inputs, "_load_group_ranks", lambda config: _group_ranks())
+    risks = {r.geoid: r for r in risk_inputs.build_tract_risks({}, "2026-06-22")}
+    assert risks["t2"].drivers[0] == "heat"

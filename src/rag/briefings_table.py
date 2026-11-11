@@ -50,6 +50,8 @@ BRIEFING_COLUMNS = [
     "retrieved_chunk_ids_json",
     "model",
     "generated_at",
+    "vulnerable_groups_json",
+    "inputs_json",  # the TractRisk the briefing was built from (Phase 3)
 ]
 
 # Columns that must never be empty. Lists (like data_gaps) can be empty,
@@ -123,6 +125,8 @@ def _briefing_row(
         "retrieved_chunk_ids_json": json.dumps(b.retrieved_chunk_ids),
         "model": b.model,
         "generated_at": _naive_utc(b.generated_at),
+        "vulnerable_groups_json": json.dumps(b.vulnerable_groups),
+        "inputs_json": json.dumps(b.inputs),
     }
 
 
