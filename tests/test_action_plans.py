@@ -323,3 +323,19 @@ def test_group_gaps_are_written_by_code():
     # A group with actions adds no gap line
     b = _generator(FakeClient()).generate(_group_tract("b", ["heat"], [OLDER]))
     assert not any("older adults" in g for g in b.data_gaps)
+
+
+def test_plan_keeps_at_most_five_actions():
+    class ManyPlanActions(FakeClient):
+        def parse(self, **kwargs):
+            self.calls += 1
+            draft = ActionPlanDraft(
+                recommended_actions=[
+                    Action(action=f"Step {i}.", excerpt_ids=["E1"]) for i in range(8)
+                ],
+                data_gaps=[],
+            )
+            return SimpleNamespace(stop_reason="end_turn", parsed_output=draft)
+
+    b = _generator(ManyPlanActions()).generate(_tract("a", ["heat"]))
+    assert [a["action"] for a in b.actions] == [f"Step {i}." for i in range(5)]

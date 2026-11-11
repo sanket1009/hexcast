@@ -38,6 +38,7 @@ def _case(
     urgency="CRITICAL",
     drivers=("heat",),
     geoid="06037000100",
+    groups=(),
 ):
     briefing = Briefing(
         geoid=geoid,
@@ -58,6 +59,7 @@ def _case(
         urgency=urgency,
         drivers=list(drivers),
         indicators={HEAT: 55.61, BEDS: 0.0},
+        vulnerable_groups=list(groups),
     )
     return EvalCase(briefing, tract)
 
@@ -159,6 +161,22 @@ def test_identical_source_sets_are_counted():
     assert m["distinct_source_pages"] == 2
     assert m["duplicate_source_sets"] == pytest.approx(2 / 3, abs=1e-3)
     assert m["same_driver_similarity"] > m["diff_driver_similarity"]
+
+
+def test_group_separation_is_positive_when_groups_change_the_text():
+    older = "older adults (65 and over)"
+    lep = "limited-English households"
+    a_older = ("Call older residents living alone during heat waves.", "a.pdf, p. 1")
+    a_lep = ("Send heat warnings in Spanish and Chinese.", "b.pdf, p. 2")
+    base = ("Open cooling centers during heat waves.", "doc.pdf, p. 1")
+    cases = [
+        _case(geoid="1", groups=(older,), actions=(base, a_older)),
+        _case(geoid="2", groups=(older,), actions=(base, a_older)),
+        _case(geoid="3", groups=(lep,), actions=(base, a_lep)),
+        _case(geoid="4", groups=(lep,), actions=(base, a_lep)),
+    ]
+    m = specificity_metrics(cases)
+    assert m["group_separation"] > 0.1
 
 
 # -- dataset and harness -----------------------------------------------------

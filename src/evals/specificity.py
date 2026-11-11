@@ -15,6 +15,12 @@ Week-level metrics (specificity_metrics):
     diff_driver_similarity    mean text similarity of briefings with different drivers
     driver_separation         same minus different; near 0 means the text barely
                               changes when the drivers change
+    group_separation          among briefings with the same drivers: similarity
+                              with the same vulnerable groups minus with
+                              different groups. Near 0 means the group actions
+                              barely change the text (Phase 3 made same-driver
+                              briefings differ by group, which lowered
+                              driver_separation; this measures that directly)
 
 Per-briefing scorers (SCORERS): length and structure.
 """
@@ -44,6 +50,7 @@ def specificity_metrics(cases: list[EvalCase]) -> dict[str, Any]:
     source_sets = Counter(frozenset(c.briefing.sources) for c in cases)
 
     same, diff = _driver_similarity(cases)
+    same_groups, diff_groups = _group_similarity(cases)
     return {
         "distinct_source_pages": len(counts),
         "top5_source_share": round(
@@ -57,6 +64,7 @@ def specificity_metrics(cases: list[EvalCase]) -> dict[str, Any]:
         "same_driver_similarity": round(same, 3),
         "diff_driver_similarity": round(diff, 3),
         "driver_separation": round(same - diff, 3),
+        "group_separation": round(same_groups - diff_groups, 3),
         "top5_source_pages": [page for page, _ in counts.most_common(5)],
     }
 
@@ -91,6 +99,23 @@ def _driver_similarity(cases: list[EvalCase]) -> tuple[float, float]:
     same_pairs = [p for p in pairs if drivers[p[0]] == drivers[p[1]]]
     diff_pairs = [p for p in pairs if drivers[p[0]] != drivers[p[1]]]
     return _mean_similarity(vectors, same_pairs), _mean_similarity(vectors, diff_pairs)
+
+
+def _group_similarity(cases: list[EvalCase]) -> tuple[float, float]:
+    """Same-driver pairs only: same vulnerable groups vs different groups."""
+    texts = [action_text(c.briefing) for c in cases]
+    vectors = TfidfVectorizer(stop_words="english").fit_transform(texts)
+    drivers = [frozenset(c.tract.drivers) for c in cases]
+    groups = [frozenset(c.tract.vulnerable_groups) for c in cases]
+
+    pairs = [
+        p
+        for p in itertools.combinations(range(len(cases)), 2)
+        if drivers[p[0]] == drivers[p[1]]
+    ]
+    same = [p for p in pairs if groups[p[0]] == groups[p[1]]]
+    diff = [p for p in pairs if groups[p[0]] != groups[p[1]]]
+    return _mean_similarity(vectors, same), _mean_similarity(vectors, diff)
 
 
 def _mean_similarity(vectors, pairs: list[tuple[int, int]]) -> float:

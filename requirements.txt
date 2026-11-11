@@ -84,8 +84,9 @@ imbalanced-learn==0.13.0   # handle class imbalance in high-risk tract labels
 # -----------------------------------------------------------------------------
 
 chromadb==1.5.9            # local vector database for policy document storage
-sentence-transformers==4.1.0        # Qwen3-Embedding-0.6B (needs transformers>=4.51)
-transformers==4.57.6                # Qwen3 architecture needs >=4.51 (KeyError: qwen3 below)
+sentence-transformers==5.7.0        # Qwen3-Embedding-0.6B; 5.x reads modular CrossEncoder heads (Ettin rerankers)
+transformers==5.22.2                # Qwen3 needs >=4.51; A1 identical to 4.57.6 (recall@3 0.385, MRR 0.698)
+tokenizers==0.23.3
 anthropic==2.3.0          # Claude API client for briefing generation
 #langchain==0.3.25          # document loading and semantic chunking
 langchain-community==0.3.25         # PDF loaders and text splitters
