@@ -3,11 +3,25 @@ compound_score.py
 =================
 Compound Climate-Health Burden Score for each census tract.
 
-The index combines three signals. Each is signed so that a higher
+The index combines four signals. Each is signed so that a higher
 contribution means more burden:
   - PM2.5 (Kriged, mean of the last N weeks)     higher = more burden
   - LST (land surface temperature z-score)        higher = more burden
   - Healthcare access (beds per 1,000 residents)  higher = LESS burden
+  - Population vulnerability (Census ACS)         higher = more burden
+
+The first three are hazards; vulnerability is who lives there. It is one
+score built from seven ACS shares (age 65+, under 5, income below 200% of
+poverty, no vehicle, limited English, uninsured, disability):
+  a. Shrink each share toward the county mean by its sampling noise
+     (empirical Bayes). B = real variance / (real variance + the tract's
+     sampling variance), shrunk = mean + B * (share - mean). A precise
+     share keeps its value; a noisy one moves toward the mean. Unlike a
+     CV cutoff, small but precise shares are kept.
+  b. z-score each shrunk share; a missing share counts as the mean (0).
+  c. Average the seven z-scores. The weekly composite z-scores this
+     average again, so vulnerability has the same weight as each hazard.
+ACS changes once a year, so vulnerability is the same every week.
 
 Method: signed z-score composite
   1. Load the three signals for the week and city. PM2.5 is the mean
@@ -77,6 +91,7 @@ SIGNED_SIGNALS = {
     "pm25_kriged": +1,
     "lst_zscore": +1,
     "access_score_er": -1,
+    "vulnerability": +1,
 }
 
 # Output column name for each signed contribution
@@ -84,7 +99,20 @@ COMPONENT_COLUMNS = {
     "pm25_kriged": "pm25_z",
     "lst_zscore": "lst_z",
     "access_score_er": "access_z",
+    "vulnerability": "vulnerability_z",
 }
+
+# acs_vulnerability columns (<name>_pct, <name>_moe) averaged into vulnerability
+VULNERABILITY_INDICATORS = [
+    "age_65_plus",
+    "under_5",
+    "low_income",
+    "no_vehicle",
+    "limited_english",
+    "uninsured",
+    "disability",
+]
+Z90 = 1.645  # ACS MOEs are 90% intervals
 
 VALID_CLASSES = {"LOW", "ELEVATED", "HIGH", "CRITICAL"}
 
@@ -247,7 +275,65 @@ def _load_signals(
             f"from {start_str} to {week_str}"
         )
     df = df.drop(columns="pm25_weeks")
-    return _fill_low_coverage_lst(df, config, week_str)
+    df = _fill_low_coverage_lst(df, config, week_str)
+    return df.merge(_load_vulnerability(config), on="geoid", how="left")
+
+
+def _load_vulnerability(config: dict[str, Any]) -> pd.DataFrame:
+    """geoid, vulnerability for the city (yearly ACS, same every week)."""
+    acs = read_query(
+        f"""
+        SELECT *
+        FROM {{dataset}}.acs_vulnerability
+        WHERE city_fips = '{config["full_fips"]}'
+        """,
+        config,
+    )
+    if acs.empty:
+        raise ValueError(
+            "acs_vulnerability is empty. Run: "
+            "PYTHONPATH=. python -m src.ingestion.acs_vulnerability"
+        )
+    return vulnerability_score(acs)
+
+
+def shrink_share(pct: pd.Series, moe: pd.Series) -> pd.Series:
+    """
+    Empirical Bayes shrinkage of ACS shares toward their mean.
+
+    Observed share = true share + sampling error (SE = MOE / 1.645).
+    Real (between-tract) variance = observed variance - mean sampling
+    variance. Each share moves toward the mean by its own noise:
+        B = real / (real + SE^2), shrunk = mean + B * (share - mean)
+    Missing shares stay missing.
+    """
+    se2 = (moe / Z90) ** 2
+    ok = pct.notna() & se2.notna()
+    if ok.sum() < 2:
+        return pct
+    mean = pct[ok].mean()
+    real = max(float(pct[ok].var(ddof=0) - se2[ok].mean()), 0.0)
+    total = real + se2
+    b = (real / total).where(total > 0, 1.0)
+    return mean + b * (pct - mean)
+
+
+def vulnerability_score(acs: pd.DataFrame) -> pd.DataFrame:
+    """
+    One vulnerability value per tract: mean z-score of the shrunk shares.
+
+    Tracts with every share missing (no residents) get NaN; the weekly
+    median fill then treats them as neutral.
+    """
+    zs = []
+    for name in VULNERABILITY_INDICATORS:
+        shrunk = shrink_share(acs[f"{name}_pct"], acs[f"{name}_moe"])
+        std = shrunk.std(ddof=0)
+        z = (shrunk - shrunk.mean()) / std if std > 0 else shrunk * 0
+        zs.append(z)
+    z = pd.concat(zs, axis=1)
+    score = z.fillna(0.0).mean(axis=1).where(z.notna().any(axis=1))
+    return pd.DataFrame({"geoid": acs["geoid"], "vulnerability": score})
 
 
 def _latest_good_week(
@@ -335,6 +421,7 @@ def _impute_missing(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
 
     Missing LST: water-only tracts with no valid land pixels.
     Missing access: unreachable tracts or tracts with no residents.
+    Missing vulnerability: tracts with no residents in the ACS.
     Dropping them would leave holes in the city map, so they stay in
     with a neutral (median) value.
 

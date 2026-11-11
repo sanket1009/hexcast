@@ -18,6 +18,7 @@ def _signals(n=200, seed=3):
             "pm25_kriged": rng.normal(9, 1, n),
             "lst_zscore": rng.normal(0, 1, n),
             "access_score_er": rng.uniform(0.5, 3.0, n),
+            "vulnerability": rng.normal(0, 1, n),
         }
     )
 
@@ -218,3 +219,16 @@ def test_kriging_year_flags_weak_weeks():
     assert summary["weak_weeks"] == 2
     assert summary["range_at_bound_weeks"] == 2
     assert summary["mae_max"] == pytest.approx(3.7)
+
+
+def test_benchmark_reports_what_vulnerability_adds():
+    annual, ces = _benchmark_inputs()
+    vuln = np.random.default_rng(9).normal(size=len(annual))
+    annual["vulnerability_z"] = vuln
+    annual["burden"] = annual["burden"] + vuln
+    ces["pop_char_score"] = vuln
+    metrics, table = iv.external_benchmark(annual, ces)
+    assert metrics["spearman_vulnerability_pop_char"] == pytest.approx(1.0)
+    assert "spearman_ces_hazards_only" in metrics
+    assert "top_decile_overlap_hazards_only" in metrics
+    assert len(table) == 11

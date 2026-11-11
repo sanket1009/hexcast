@@ -203,6 +203,10 @@ def get_client(config: dict[str, Any]) -> bigquery.Client:
 # REPLACE_PARTITION deletes rows for each (week_start_date, city_fips) pair
 # in the incoming DataFrame, then inserts the new rows, in one transaction.
 # Other weeks and cities are left alone.
+#
+# Additive schema changes: a column in the DataFrame that the table lacks is
+# added first (NULL for existing rows), e.g. vulnerability_z in
+# compound_scores (Phase 3). Columns are never dropped or retyped.
 
 REPLACE_PARTITION = "REPLACE_PARTITION"
 PARTITION_KEYS = ["week_start_date", "city_fips"]
@@ -233,6 +237,7 @@ def _local_replace_partition(
         if not _local_table_exists(con, schema, table_name):
             con.execute(f"CREATE TABLE {full_table} AS SELECT * FROM incoming_df")
         else:
+            _local_add_new_columns(con, full_table)
             con.execute("BEGIN TRANSACTION")
             try:
                 for week, city in keys:
@@ -255,6 +260,47 @@ def _local_replace_partition(
     )
 
 
+def _local_add_new_columns(con, full_table: str) -> None:
+    """Add incoming_df columns that full_table lacks, with DuckDB's inferred types."""
+    existing = {row[0] for row in con.execute(f"DESCRIBE {full_table}").fetchall()}
+    for name, col_type, *_ in con.execute(
+        "DESCRIBE SELECT * FROM incoming_df"
+    ).fetchall():
+        if name not in existing:
+            con.execute(f'ALTER TABLE {full_table} ADD COLUMN "{name}" {col_type}')
+            logger.info(f"Added column {name} ({col_type}) to {full_table}")
+
+
+def _bq_type(series: pd.Series) -> str:
+    """BigQuery type for a new nullable column."""
+    if pd.api.types.is_bool_dtype(series):
+        return "BOOLEAN"
+    if pd.api.types.is_integer_dtype(series):
+        return "INTEGER"
+    if pd.api.types.is_float_dtype(series):
+        return "FLOAT"
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return "TIMESTAMP"
+    return "STRING"
+
+
+def _gcp_add_new_columns(
+    df: pd.DataFrame, target: bigquery.Table, client: bigquery.Client
+) -> bigquery.Table:
+    """Append nullable fields for df columns the BigQuery table lacks."""
+    existing = {field.name for field in target.schema}
+    new = [
+        bigquery.SchemaField(c, _bq_type(df[c]), mode="NULLABLE")
+        for c in df.columns
+        if c not in existing
+    ]
+    if not new:
+        return target
+    target.schema = [*target.schema, *new]
+    logger.info(f"Adding columns {[f.name for f in new]} to {target.table_id}")
+    return client.update_table(target, ["schema"])
+
+
 def _gcp_replace_partition(
     df: pd.DataFrame, full_table_id: str, client: bigquery.Client
 ) -> None:
@@ -267,7 +313,7 @@ def _gcp_replace_partition(
     """
     _partition_values(df)  # validates the key columns exist
     staging_id = f"{full_table_id}_staging"
-    target = client.get_table(full_table_id)
+    target = _gcp_add_new_columns(df, client.get_table(full_table_id), client)
 
     load_config = bigquery.LoadJobConfig(
         write_disposition="WRITE_TRUNCATE",
