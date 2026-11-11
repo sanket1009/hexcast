@@ -14,9 +14,27 @@ isolated high-scoring tract, because it indicates neighborhood-level
 compound risk that affects a contiguous population.
 
 Method:
-  - Global: Moran's I with 999 permutations (pseudo p-value)
-  - Local: Getis-Ord Gi* with queen contiguity weights
-  - Significance levels: p<0.05 (standard) and p<0.01 (high)
+  - Global: Moran's I with 999 permutations (pseudo p-value), queen
+    contiguity weights without self-weights
+  - Local: Getis-Ord Gi* with queen contiguity weights plus a self-weight
+    (each tract counts in its own neighborhood), row-standardized
+  - Significance: two-tailed p<0.05 (|z|>1.96) and p<0.01 (|z|>2.576).
+    esda's p_norm is one-tailed; until Nov 2026 the classes used it
+    directly, so HOTSPOT_95 meant z>1.645. The stored gi_star_pvalue is
+    the two-tailed value.
+  - Multiple testing: each week runs one test per tract (2,498 in LA).
+    The Benjamini-Hochberg (FDR) count is logged for reference; classes
+    use the per-tract cutoffs above.
+
+Note on weekly counts: Gi* compares each neighborhood with that week's
+city mean, so the number of hotspots depends on the shape of the week's
+burden distribution (a long low tail hides high clusters). Over 53 weeks
+the hotspot count tracked burden skewness (Spearman 0.86) while Moran's I
+stayed between 0.71 and 0.95. Use Gi* z ranks, not counts, to compare
+weeks.
+
+Catalina Island (2 tracts) is its own contiguity component: its tracts
+are compared only with each other.
 
 Input:
     BigQuery: compound_scores (weekly compound burden scores)
@@ -33,6 +51,7 @@ Usage:
     df = detect_hotspots(config)
 """
 
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -244,10 +263,50 @@ def _build_spatial_weights(
     """
     W = libpysal.weights.Queen.from_dataframe(
         tracts_gdf,
+        use_index=False,  # rows are aligned to the scores array by position
         silence_warnings=True,
     )
+    if W.n_components > 1:
+        sizes = np.bincount(W.component_labels)
+        logger.info(
+            f"Contiguity has {W.n_components} components (sizes "
+            f"{sorted(sizes.tolist(), reverse=True)}); small ones are islands"
+        )
     W.transform = "r"
     return W
+
+
+def _gi_star_weights(W: libpysal.weights.W) -> libpysal.weights.W:
+    """
+    Binary contiguity plus a self-weight of 1, row-standardized.
+
+    Gi* includes each tract in its own neighborhood. Putting the self-weight
+    in the matrix makes that explicit; otherwise esda guesses it and warns.
+    """
+    binary = libpysal.weights.W(W.neighbors, id_order=W.id_order, silence_warnings=True)
+    with warnings.catch_warnings():
+        # fill_diagonal rebuilds W and repeats the island warning logged above
+        warnings.filterwarnings(
+            "ignore", message="The weights matrix is not fully connected"
+        )
+        with_self = libpysal.weights.fill_diagonal(binary, 1.0)
+    with_self.transform = "r"
+    return with_self
+
+
+def fdr_count(pvalues: np.ndarray, alpha: float) -> int:
+    """
+    Number of tests significant under Benjamini-Hochberg at level alpha.
+
+    Sort the p-values; the k smallest are significant for the largest k
+    with p_(k) <= k / m * alpha.
+    """
+    p = np.sort(np.asarray(pvalues, dtype=float))
+    m = len(p)
+    if m == 0:
+        return 0
+    passed = np.nonzero(p <= np.arange(1, m + 1) / m * alpha)[0]
+    return int(passed[-1] + 1) if len(passed) else 0
 
 
 def _compute_morans_i(
@@ -361,17 +420,19 @@ def _compute_gi_star(
     """
     logger.debug(f"Computing Gi* for {len(scores)} tracts")
 
-    # G_Local computes Gi* (star variant — includes self in calculation)
-    # star=True: include tract i's own value in the spatial lag
-    # transform='R': use row-standardized weights
+    # G_Local computes Gi* (star variant: includes self in calculation)
+    # Self-weight comes from _gi_star_weights; transform='R' keeps rows summing to 1
     # permutations=0: use analytical p-values (faster than permutation)
     gi = G_Local(
         scores,
-        W,
-        star=True,
+        _gi_star_weights(W),
+        star=None,  # the self-weight is already in the matrix
         transform="R",
         permutations=0,  # analytical p-values sufficient for Gi*
     )
+    # esda's p_norm is one-tailed (normal tail beyond |z|). Hotspots and
+    # coldspots are both tested, so the p-value is two-tailed.
+    p_two = np.minimum(2 * gi.p_norm, 1.0)
 
     # Classify hotspot significance level
     # Using analytical p-values from normal distribution
@@ -379,7 +440,7 @@ def _compute_gi_star(
     high_sig = config["hotspot_significance"]["high"]
 
     hotspot_classes = []
-    for z, p in zip(gi.Zs, gi.p_norm, strict=False):
+    for z, p in zip(gi.Zs, p_two, strict=True):
         if z > 0 and p < high_sig:
             hotspot_classes.append("HOTSPOT_99")
         elif z > 0 and p < standard_sig:
@@ -395,7 +456,7 @@ def _compute_gi_star(
         {
             "geoid": geoids,
             "gi_star_zscore": gi.Zs.round(4),
-            "gi_star_pvalue": gi.p_norm.round(6),
+            "gi_star_pvalue": p_two.round(6),
             "hotspot_class": hotspot_classes,
         }
     )
@@ -411,6 +472,10 @@ def _compute_gi_star(
         count = (df["hotspot_class"] == cls).sum()
         if count > 0:
             logger.info(f"  {cls}: {count:,} tracts")
+    logger.info(
+        f"  significant after Benjamini-Hochberg at {standard_sig}: "
+        f"{fdr_count(p_two, standard_sig):,} of {len(p_two):,} tracts"
+    )
 
     return df
 

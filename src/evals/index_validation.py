@@ -29,6 +29,26 @@ cannot plan outreach around a list that changes by half every week.
      and population parts, and CDC PLACES outcomes
    - top_decile_overlap: tracts in the top 10% of both indexes
    - the same two numbers with access removed (PM2.5 + heat only)
+   - CES asthma and cardiovascular ED visit rates (observed outcomes).
+     CDC PLACES asthma is a model-based estimate driven by demographics;
+     in LA it tracks the Asian share of a tract at -0.63, so it is kept
+     for reference but the ED rates are the outcome check.
+
+4. Hotspot stability (all stored weeks): Gi* hotspots week to week.
+   - retained: share of last week's hotspots still hotspots
+   - rank_spearman_prev: rank correlation of Gi* z with last week
+   - top_overlap: overlap of the top_n tracts by Gi* z with last week
+     (a fixed-size set, so it does not depend on the significance cutoff)
+   - count_skew_spearman: rank correlation of the weekly hotspot count
+     with the skewness of raw burden. A high value means the count moves
+     with the shape of the week's distribution, not with where burden is.
+
+5. Kriging over the year: leave-one-out MAE per week and weak-week flags
+   (MAE above mae_limit, or nugget >= partial sill: the variogram finds
+   no spatial structure beyond noise). range_at_bound marks weeks whose
+   fitted range sits at the fit's upper bound (3x the longest lag): the
+   variogram is still rising at the longest distance, so the range is
+   not estimated.
 """
 
 from itertools import pairwise
@@ -166,6 +186,14 @@ def external_benchmark(
         ("lst_z", "ces_score", "heat component vs CES overall"),
         ("access_z", "ces_score", "access component vs CES overall"),
     ]
+    for col, label in [
+        ("asthma_ed_rate", "asthma ED visits"),
+        ("cardio_ed_rate", "cardiovascular ED visits"),
+    ]:
+        if col in d:
+            pairs.append(("burden", col, f"overall vs CES {label}"))
+            pairs.append(("pm25_z", col, f"PM2.5 component vs CES {label}"))
+            pairs.append(("lst_z", col, f"heat component vs CES {label}"))
     if places is not None:
         d = d.merge(places, on="geoid", how="left")
         for col in ["asthma_pct", "heart_disease_pct", "copd_pct", "diabetes_pct"]:
@@ -206,3 +234,94 @@ def external_benchmark(
         ),
     }
     return metrics, table
+
+
+def hotspot_stability(
+    hotspots: pd.DataFrame,
+    top_n: int = 100,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    """
+    Week-to-week stability of Gi* hotspots.
+
+    hotspots: columns week_start_date, geoid, gi_star_zscore,
+    hotspot_class, raw_burden (several weeks).
+    Returns (per-week table, summary metrics).
+    """
+    h = hotspots.copy()
+    h["week_start_date"] = pd.to_datetime(h["week_start_date"])
+    weeks = sorted(h["week_start_date"].unique())
+    if len(weeks) < 2:
+        raise ValueError("Hotspot stability needs at least two weeks")
+
+    is_hot = h["hotspot_class"].str.startswith("HOTSPOT")
+    hot = {w: set(h.loc[is_hot & (h["week_start_date"] == w), "geoid"]) for w in weeks}
+    z = h.pivot(index="geoid", columns="week_start_date", values="gi_star_zscore")
+    top = {w: set(z[w].nlargest(top_n).index) for w in weeks}
+    skew = h.groupby("week_start_date")["raw_burden"].skew()
+
+    rows = []
+    for prev, cur in pairwise(weeks):
+        both = z[[prev, cur]].dropna()
+        rows.append(
+            {
+                "week_start_date": pd.Timestamp(cur).date(),
+                "n_hotspots": len(hot[cur]),
+                "retained": len(hot[prev] & hot[cur]) / len(hot[prev])
+                if hot[prev]
+                else np.nan,
+                "rank_spearman_prev": float(spearmanr(both[prev], both[cur])[0]),
+                "top_overlap": len(top[prev] & top[cur]) / top_n,
+                "burden_skew": float(skew[cur]),
+            }
+        )
+    per_week = pd.DataFrame(rows)
+
+    counts = pd.Series([len(hot[w]) for w in weeks])
+    weeks_hot = pd.Series(
+        [g for w in weeks for g in hot[w]], dtype="object"
+    ).value_counts()
+    summary = {
+        "n_weeks": len(weeks),
+        "count_min": int(counts.min()),
+        "count_median": float(counts.median()),
+        "count_max": int(counts.max()),
+        "retained_median": float(per_week["retained"].median()),
+        "rank_spearman_prev_median": float(per_week["rank_spearman_prev"].median()),
+        "top_overlap_median": float(per_week["top_overlap"].median()),
+        "top_overlap_min": float(per_week["top_overlap"].min()),
+        "count_skew_spearman": float(spearmanr(counts, [skew[w] for w in weeks])[0]),
+        "ever_hotspot": int(len(weeks_hot)),
+        "persistent_hotspot": int((weeks_hot >= len(weeks) / 2).sum()),
+    }
+    return per_week, summary
+
+
+def kriging_year(
+    kriged: pd.DataFrame,
+    mae_limit: float = 2.0,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    """
+    Kriging quality over all stored weeks.
+
+    kriged: one row per week with week_start_date, cv_mae, cv_r2,
+    n_monitors, variogram_nugget, variogram_psill, variogram_range_m.
+    Returns (per-week table with flags, summary metrics).
+    """
+    k = kriged.sort_values("week_start_date").reset_index(drop=True).copy()
+    k["no_structure"] = k["variogram_nugget"] >= k["variogram_psill"]
+    k["weak"] = (k["cv_mae"] > mae_limit) | k["no_structure"]
+    # The upper bound is 3x the longest lag. It shifts a little with the
+    # monitor set (226-242 km in LA with 19-22 monitors), while ranges the
+    # fit actually estimates stay far below it (at most 126 km), so 90% of
+    # the longest fitted range separates the two
+    k["range_at_bound"] = k["variogram_range_m"] >= 0.9 * k["variogram_range_m"].max()
+    summary = {
+        "n_weeks": len(k),
+        "mae_median": float(k["cv_mae"].median()),
+        "mae_mean": float(k["cv_mae"].mean()),
+        "mae_max": float(k["cv_mae"].max()),
+        "weak_weeks": int(k["weak"].sum()),
+        "no_structure_weeks": int(k["no_structure"].sum()),
+        "range_at_bound_weeks": int(k["range_at_bound"].sum()),
+    }
+    return k, summary

@@ -8,6 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import norm
 from shapely.geometry import box
 
 from src.spatial import compound_score, healthcare_access, hotspots, kriging
@@ -210,6 +211,79 @@ def test_short_pm25_window_logs_a_warning(monkeypatch):
     assert any("2 of 4 weeks" in w for w in warnings)
 
 
+def test_latest_good_week_skips_cloudy_weeks():
+    counts = pd.DataFrame(
+        {"week": ["2025-11-10", "2025-11-17", "2025-11-24"], "n": [95, 96, 9]}
+    )
+    assert compound_score._latest_good_week(counts, 100, 0.8) == "2025-11-17"
+    assert compound_score._latest_good_week(counts.iloc[2:], 100, 0.8) is None
+
+
+def test_cloudy_week_reuses_last_good_week_lst(monkeypatch):
+    # 2025-12-01 had LST for 9% of tracts: the median fill gave the rest an
+    # average heat score. The week should reuse 2025-11-17 instead.
+    week = _signals(10).assign(pm25_weeks=4)
+    week.loc[1:, "lst_zscore"] = np.nan
+    earlier = pd.DataFrame(
+        {"geoid": week["geoid"], "lst_zscore": np.arange(10, dtype=float)}
+    )
+    counts = pd.DataFrame({"week": ["2025-11-17", "2025-11-24"], "n": [10, 1]})
+    queries = []
+
+    def read_query(query, config):
+        queries.append(" ".join(query.split()))
+        if "COUNT(lst_zscore)" in query:
+            return counts
+        if "SELECT geoid, lst_zscore" in query:
+            return earlier
+        return week
+
+    monkeypatch.setattr(compound_score, "read_query", read_query)
+    monkeypatch.setattr(compound_score.logger, "warning", lambda m: None)
+    out = compound_score._load_signals(
+        {"full_fips": "06037", "gee": {"min_coverage": 0.8}},
+        "2025-12-01",
+        pm25_window_weeks=4,
+    )
+    assert out["lst_zscore"].tolist() == list(range(10))
+    assert "week_start_date >= '2025-10-06'" in queries[1]
+    assert "week_start_date = '2025-11-17'" in queries[2]
+
+
+def test_well_covered_week_keeps_its_own_lst(monkeypatch):
+    queries = []
+
+    def read_query(query, config):
+        queries.append(query)
+        return _signals(10).assign(pm25_weeks=4)
+
+    monkeypatch.setattr(compound_score, "read_query", read_query)
+    out = compound_score._load_signals(
+        {"full_fips": "06037"}, "2026-06-22", pm25_window_weeks=4
+    )
+    assert len(queries) == 1
+    assert out["lst_zscore"].notna().all()
+
+
+def test_no_good_week_falls_back_to_median_with_a_warning(monkeypatch):
+    week = _signals(10).assign(pm25_weeks=4)
+    week.loc[1:, "lst_zscore"] = np.nan
+    warnings = []
+
+    def read_query(query, config):
+        if "COUNT(lst_zscore)" in query:
+            return pd.DataFrame({"week": ["2025-11-24"], "n": [1]})
+        return week
+
+    monkeypatch.setattr(compound_score, "read_query", read_query)
+    monkeypatch.setattr(compound_score.logger, "warning", warnings.append)
+    out = compound_score._load_signals(
+        {"full_fips": "06037"}, "2025-12-01", pm25_window_weeks=4
+    )
+    assert out["lst_zscore"].isna().sum() == 9
+    assert any("city median" in w for w in warnings)
+
+
 # ---------------------------------------------------------------------------
 # Hot spots
 # ---------------------------------------------------------------------------
@@ -239,6 +313,48 @@ def test_gi_star_finds_a_high_cluster_in_the_corner():
     )  # center of the corner block
     far_corner = out.loc["g099", "hotspot_class"]
     assert not far_corner.startswith("HOTSPOT")
+
+
+def test_gi_star_classes_use_two_tailed_cutoffs():
+    # A tract at z = 1.8 was HOTSPOT_95 under the one-tailed p (cutoff 1.645).
+    # Two-tailed, 95% needs |z| > 1.96.
+    side = 10
+    cells = [box(c, r, c + 1, r + 1) for r in range(side) for c in range(side)]
+    grid = gpd.GeoDataFrame(
+        {"geoid": [f"g{i:03d}" for i in range(side * side)]}, geometry=cells
+    )
+    scores = np.random.default_rng(5).normal(0, 1, side * side)
+    W = hotspots._build_spatial_weights(grid)
+    out = hotspots._compute_gi_star(
+        scores,
+        W,
+        grid["geoid"].values,
+        {"hotspot_significance": {"standard": 0.05, "high": 0.01}},
+    )
+    z = out["gi_star_zscore"].abs()
+    sig = out["hotspot_class"] != "NOT_SIGNIFICANT"
+    assert (z[sig] > 1.959).all()
+    assert (z[~sig] <= 1.96).all()
+    # Stored p-value is two-tailed: p = 0.05 at |z| = 1.96
+    assert np.allclose(out["gi_star_pvalue"], 2 * norm.sf(z), atol=1e-4)
+
+
+def test_gi_star_weights_include_self():
+    grid = gpd.GeoDataFrame(
+        {"geoid": ["a", "b", "c"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1), box(2, 0, 3, 1)],
+    )
+    W = hotspots._gi_star_weights(hotspots._build_spatial_weights(grid))
+    # Middle tract: itself and its two neighbors, a third each
+    assert W.neighbors[1] and 1 in W.neighbors[1]
+    assert np.allclose(sorted(W.weights[1]), [1 / 3] * 3)
+
+
+def test_fdr_count_by_hand():
+    # m = 4, alpha 0.05: cutoffs 0.0125, 0.025, 0.0375, 0.05
+    assert hotspots.fdr_count(np.array([0.01, 0.02, 0.04, 0.9]), 0.05) == 2
+    assert hotspots.fdr_count(np.array([0.2, 0.3]), 0.05) == 0
+    assert hotspots.fdr_count(np.array([]), 0.05) == 0
 
 
 # ---------------------------------------------------------------------------
