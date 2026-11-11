@@ -143,6 +143,34 @@ rag:
     air_quality: "protecting {group} from fine particle air pollution"
     healthcare_access: "helping {group} get to medical care"
 
+evals:
+  # A6 LLM-as-judge (src/evals/judge.py). Judge is a stronger model than the
+  # Haiku generator, at temperature 0, with a fixed rubric. Trusted per
+  # criterion only when its agreement with the user's 20 hand labels reaches
+  # min_kappa (quadratic weighted Cohen's kappa; 0.61 is "substantial").
+  judge:
+    model: "claude-sonnet-5-5"
+    max_tokens: 4000
+    temperature: 0
+    rubric: "evals/rubrics/briefing_v1.md"
+    sample_size: 60
+    human_labels: 20
+    seed: 42
+    min_kappa: 0.61
+    max_calls: 60
+  # A7 robustness (src/evals/robustness.py): 10 injection + 5 unsafe excerpt +
+  # 3 empty retrieval + 4 units x 3 repeats = 30 Haiku calls
+  robustness:
+    max_calls: 30
+    perturbation_tracts: 14   # one per urgency x driver stratum (free)
+    seed: 42
+  # USD per million tokens, Anthropic pricing page (checked 2026-11-11).
+  # Haiku 5.5 rate is for prompts up to 100k tokens (ours are about 5k).
+  prices_per_mtok:
+    claude-haiku-5-5: {input: 0.10, output: 0.50}
+    claude-sonnet-5-5: {input: 2.00, output: 10.00}
+  budget_usd: 5.00
+
 logging:
   level: "INFO"
   format: "%(asctime)s | %(name)s | %(levelname)s | %(message)s"

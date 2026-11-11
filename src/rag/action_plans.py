@@ -113,6 +113,15 @@ class ActionPlanDraft(BaseModel):
 
 
 @dataclass
+class Draft:
+    """One model call's output after grounding: what plans and robustness tests use."""
+
+    actions: list[dict[str, Any]]  # grounded and capped
+    data_gaps: list[str]
+    raw_actions: list[Action]  # as the model wrote them, before grounding
+
+
+@dataclass
 class GroupActions:
     key: str  # "<driver>|<ACS indicator key>", e.g. "heat|age_65_plus"
     driver: str
@@ -167,6 +176,8 @@ class PlanBriefingGenerator(BriefingGenerator):
             group_cache_path, GroupActions
         )
         self.model_calls = 0
+        self.input_tokens = 0  # summed from response.usage, for cost reports
+        self.output_tokens = 0
 
     def generate(self, tract: TractRisk) -> Briefing:
         if tract.urgency not in self.levels:
@@ -247,24 +258,30 @@ class PlanBriefingGenerator(BriefingGenerator):
                 f"to continue"
             )
         self.model_calls += 1
-        return self.client.messages.parse(
+        response = self.client.messages.parse(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
             messages=[{"role": "user", "content": content}],
             output_format=output_format,
         )
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.input_tokens += usage.input_tokens
+            self.output_tokens += usage.output_tokens
+        return response
 
-    # -- helpers ------------------------------------------------------------
-
-    def _write_plan(self, tract: TractRisk, key: str, groups: list[str]) -> ActionPlan:
-        chunks = self._retrieve(tract)  # depends only on drivers and groups
-        excerpts = {f"E{i}": c for i, c in enumerate(chunks, start=1)}
-        logger.info(f"Plan {key}: {len(excerpts)} excerpts, model={self.model}")
-
+    def draft_plan(
+        self,
+        drivers: list[str],
+        groups: list[str],
+        excerpts: dict[str, RetrievedChunk],
+        key: str,
+    ) -> Draft:
+        """One plan call on the given excerpts. Public so A7 can pass its own."""
         response = self._call(
             PLAN_SYSTEM_PROMPT,
-            self._plan_prompt(tract.drivers, groups, excerpts),
+            self._plan_prompt(drivers, groups, excerpts),
             ActionPlanDraft,
         )
         if (
@@ -274,10 +291,48 @@ class PlanBriefingGenerator(BriefingGenerator):
             raise BriefingError(
                 f"Plan {key}: no valid plan (stop_reason={response.stop_reason})"
             )
-
         draft: ActionPlanDraft = response.parsed_output
         actions = self._ground_actions(draft.recommended_actions, excerpts, key)
-        actions = actions[:MAX_PLAN_ACTIONS]
+        return Draft(
+            actions=actions[:MAX_PLAN_ACTIONS],
+            data_gaps=draft.data_gaps,
+            raw_actions=list(draft.recommended_actions),
+        )
+
+    def draft_group(
+        self, driver: str, group: str, excerpts: dict[str, RetrievedChunk], key: str
+    ) -> Draft:
+        """One group-actions call on the given excerpts. Public so A7 can pass its own."""
+        response = self._call(
+            GROUP_SYSTEM_PROMPT,
+            self._group_prompt(driver, group, excerpts),
+            ActionPlanDraft,
+        )
+        if (
+            response.stop_reason in ("refusal", "max_tokens")
+            or response.parsed_output is None
+        ):
+            raise BriefingError(
+                f"Group actions {key}: no valid output (stop_reason={response.stop_reason})"
+            )
+        draft: ActionPlanDraft = response.parsed_output
+        actions = self._ground_actions(
+            draft.recommended_actions[:MAX_GROUP_ACTIONS], excerpts, key
+        )
+        return Draft(
+            actions=actions,
+            data_gaps=draft.data_gaps,
+            raw_actions=list(draft.recommended_actions),
+        )
+
+    # -- helpers ------------------------------------------------------------
+
+    def _write_plan(self, tract: TractRisk, key: str, groups: list[str]) -> ActionPlan:
+        chunks = self._retrieve(tract)  # depends only on drivers and groups
+        excerpts = {f"E{i}": c for i, c in enumerate(chunks, start=1)}
+        logger.info(f"Plan {key}: {len(excerpts)} excerpts, model={self.model}")
+        draft = self.draft_plan(tract.drivers, groups, excerpts, key)
+        actions = draft.actions
         return ActionPlan(
             key=key,
             drivers=sorted(tract.drivers),
@@ -303,23 +358,8 @@ class PlanBriefingGenerator(BriefingGenerator):
         logger.info(
             f"Group actions {key}: {len(excerpts)} excerpts, model={self.model}"
         )
-
-        response = self._call(
-            GROUP_SYSTEM_PROMPT,
-            self._group_prompt(driver, group, excerpts),
-            ActionPlanDraft,
-        )
-        if (
-            response.stop_reason in ("refusal", "max_tokens")
-            or response.parsed_output is None
-        ):
-            raise BriefingError(
-                f"Group actions {key}: no valid output (stop_reason={response.stop_reason})"
-            )
-        draft: ActionPlanDraft = response.parsed_output
-        actions = self._ground_actions(
-            draft.recommended_actions[:MAX_GROUP_ACTIONS], excerpts, key
-        )
+        draft = self.draft_group(driver, group, excerpts, key)
+        actions = draft.actions
         return GroupActions(
             key=key,
             driver=driver,

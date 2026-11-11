@@ -14,13 +14,21 @@ Rank caveat:
     on raw_burden. rank_by="burden_percentile" rebuilds the older rank, which
     is what the stored 2026-06-22 briefings saw.
 
+Briefings can also be read from JSONL files that carry their own input
+(Briefing.inputs): a run's full_checkpoint.jsonl, which is what the warehouse
+rows were written from, or a frozen eval sample (judge sample, CI fixtures).
+No warehouse is needed for those.
+
 Usage:
     cases = load_cases(config, "2026-06-22", rank_by="burden_percentile")
     cases[0].briefing.summary, cases[0].tract.indicators
+
+    cases = load_cases_jsonl("data/briefing_runs/2026-06-22_groups/full_checkpoint.jsonl")
 """
 
 import json
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
@@ -71,6 +79,25 @@ def load_cases(
         f"Loaded {len(cases)} eval cases for week {week_str} (rank_by={rank_by})"
     )
     return cases
+
+
+def load_cases_jsonl(path: str | Path) -> list[EvalCase]:
+    """Cases from a JSONL file of Briefing records that include their input.
+
+    Accepts plain Briefing records (checkpoint files) or records with the
+    Briefing under a "briefing" key (frozen eval samples).
+    """
+    cases = []
+    for line in Path(path).read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        record = record.get("briefing", record)
+        if not record.get("inputs"):
+            raise ValueError(f"{path}: briefing {record['geoid']} has no inputs")
+        briefing = Briefing(**record)
+        cases.append(EvalCase(briefing, TractRisk(**record["inputs"])))
+    return sorted(cases, key=lambda c: c.briefing.geoid)
 
 
 def load_briefings(config: dict[str, Any], week_str: str) -> list[Briefing]:

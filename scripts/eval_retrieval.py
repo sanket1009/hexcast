@@ -23,6 +23,10 @@ Options:
                   "Instruct: TEXT\nQuery:"). Only queries change, so the
                   stored document vectors are reused.
 
+    --save-rankings PATH
+                  also freeze the page rankings for the CI gate (A9), e.g.
+                  tests/fixtures/evals/retrieval_rankings_v1.json
+
 Writes evals/results/retrieval_<time>.json (metrics, sweep, per query) and
 evals/results/retrieval_sweep_<time>.png (recall vs negative rejection).
 """
@@ -71,6 +75,7 @@ def main() -> int:
     parser.add_argument("--embedding-model")
     parser.add_argument("--instruction")
     parser.add_argument("--reranker")
+    parser.add_argument("--save-rankings")
     args = parser.parse_args()
 
     config = load_config()
@@ -135,6 +140,14 @@ def main() -> int:
         "git_dirty": bool(_git("status", "--porcelain")),
         "evaluated_at": stamp,
     }
+    if args.save_rankings:
+        from src.evals.gate import save_rankings
+
+        frozen = save_rankings(
+            Path(args.save_rankings), args.gold, cutoff, rankings, manifest
+        )
+        print(f"Rankings frozen: {frozen}")
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"retrieval_{stamp[:19].replace(':', '')}"
     out = RESULTS_DIR / f"{stem}.json"

@@ -78,6 +78,20 @@ Example (tract 06037900102, critical, ranked 5 of 2,498):
 >
 > **Data gaps:** no excerpt addresses PM2.5, asthma, or adding hospital capacity.
 
+## Evaluation
+
+Briefings and retrieval are scored by an eval suite (`src/evals/`), logged to MLflow (experiment `chbindex-evals`):
+
+| Eval | What it checks | Cost |
+|---|---|---|
+| A1 retrieval | recall@3, MRR, nDCG@10 and negative rejection on a hand-labeled gold set; cutoff sweep | free, local |
+| A2 faithfulness, A4 rules, A5 specificity | numbers match tract data, no system talk or source naming, reading grade, briefing similarity across drivers and groups | free |
+| A6 judge | Claude Sonnet 5.5 scores 60 stratified briefings on a fixed rubric; trusted per criterion only if weighted Cohen's kappa against 20 hand labels reaches 0.61 | about $1, cached |
+| A7 robustness | prompt injection and unsafe planted excerpts, empty retrieval, repeat-run consistency, indicator/group/driver perturbation | about 30 Haiku calls |
+| A9 CI gate | A2/A4/A5 on the frozen judge sample and A1 metric code on frozen retrieval rankings, against `evals/baselines/ci_*.json` | free, every PR |
+
+CI does not run live retrieval: it needs the 1.2 GB Qwen3 embedding model and the Chroma index. Run `scripts/eval_retrieval.py` locally before merging any change to retrieval or the corpus.
+
 ## Things that went wrong and what changed
 
 - **Ocean pixels in the heat layer.** 39 coastal tracts read about 14 °C too cool until water was masked.
