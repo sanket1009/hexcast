@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Project root — all relative paths resolve from here
@@ -214,6 +214,9 @@ class CityConfig(BaseModel):
     gee: GeeConfig
     osmnx: OsmnxConfig
     healthcare: HealthcareConfig
+
+    # Index inputs: PM2.5 is the mean of the last N weekly Kriged surfaces
+    pm25_window_weeks: int = Field(default=4, ge=1, le=13)
 
     # Thresholds
     burden_percentiles: BurdenPercentilesConfig

@@ -156,13 +156,53 @@ def test_signals_join_healthcare_access_for_the_same_week(monkeypatch):
 
     def read_query(query, config):
         queries.append(query)
-        return _signals(5)
+        return _signals(5).assign(pm25_weeks=1)
 
     monkeypatch.setattr(compound_score, "read_query", read_query)
     compound_score._load_signals({"full_fips": "06037"}, "2025-08-04")
     joined = " ".join(queries[0].split())
     assert "a.week_start_date = '2025-08-04'" in joined
     assert "l.week_start_date = '2025-08-04'" in joined
+
+
+def test_pm25_window_starts_three_weeks_back_for_four_weeks():
+    assert compound_score._window_start("2026-06-22", 4) == "2026-06-01"
+    assert compound_score._window_start("2026-06-22", 1) == "2026-06-22"
+    # Crosses a year boundary
+    assert compound_score._window_start("2026-01-12", 4) == "2025-12-22"
+
+
+def test_pm25_is_averaged_over_the_window(monkeypatch):
+    queries = []
+
+    def read_query(query, config):
+        queries.append(query)
+        return _signals(5).assign(pm25_weeks=4)
+
+    monkeypatch.setattr(compound_score, "read_query", read_query)
+    out = compound_score._load_signals(
+        {"full_fips": "06037"}, "2026-06-22", pm25_window_weeks=4
+    )
+    joined = " ".join(queries[0].split())
+    assert "AVG(pm25_kriged)" in joined
+    assert "BETWEEN '2026-06-01' AND '2026-06-22'" in joined
+    # The helper column does not leak into the signals
+    assert list(out.columns) == ["geoid", "pm25_kriged", "lst_zscore", "access_score_er"]
+
+
+def test_short_pm25_window_logs_a_warning(monkeypatch):
+    # The project logger does not propagate, so capture its calls directly
+    warnings = []
+    monkeypatch.setattr(
+        compound_score,
+        "read_query",
+        lambda q, c: _signals(5).assign(pm25_weeks=2),
+    )
+    monkeypatch.setattr(compound_score.logger, "warning", warnings.append)
+    compound_score._load_signals(
+        {"full_fips": "06037"}, "2025-06-30", pm25_window_weeks=4
+    )
+    assert any("2 of 4 weeks" in w for w in warnings)
 
 
 # ---------------------------------------------------------------------------
