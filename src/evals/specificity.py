@@ -22,6 +22,11 @@ Week-level metrics (specificity_metrics):
                               briefings differ by group, which lowered
                               driver_separation; this measures that directly)
 
+    urgency_separation    among briefings with the same drivers: similarity
+                          with the same urgency minus with the other urgency.
+                          Phase 5.1 writes plans per urgency level; before
+                          that CRITICAL and ELEVATED shared one plan (near 0)
+
 Per-briefing scorers (SCORERS): length and structure.
 """
 
@@ -51,6 +56,7 @@ def specificity_metrics(cases: list[EvalCase]) -> dict[str, Any]:
 
     same, diff = _driver_similarity(cases)
     same_groups, diff_groups = _group_similarity(cases)
+    same_urg, diff_urg = _urgency_similarity(cases)
     return {
         "distinct_source_pages": len(counts),
         "top5_source_share": round(
@@ -65,6 +71,7 @@ def specificity_metrics(cases: list[EvalCase]) -> dict[str, Any]:
         "diff_driver_similarity": round(diff, 3),
         "driver_separation": round(same - diff, 3),
         "group_separation": round(same_groups - diff_groups, 3),
+        "urgency_separation": round(same_urg - diff_urg, 3),
         "top5_source_pages": [page for page, _ in counts.most_common(5)],
     }
 
@@ -115,6 +122,23 @@ def _group_similarity(cases: list[EvalCase]) -> tuple[float, float]:
     ]
     same = [p for p in pairs if groups[p[0]] == groups[p[1]]]
     diff = [p for p in pairs if groups[p[0]] != groups[p[1]]]
+    return _mean_similarity(vectors, same), _mean_similarity(vectors, diff)
+
+
+def _urgency_similarity(cases: list[EvalCase]) -> tuple[float, float]:
+    """Same-driver pairs only: same urgency vs different urgency."""
+    texts = [action_text(c.briefing) for c in cases]
+    vectors = TfidfVectorizer(stop_words="english").fit_transform(texts)
+    drivers = [frozenset(c.tract.drivers) for c in cases]
+    urgency = [c.tract.urgency for c in cases]
+
+    pairs = [
+        p
+        for p in itertools.combinations(range(len(cases)), 2)
+        if drivers[p[0]] == drivers[p[1]]
+    ]
+    same = [p for p in pairs if urgency[p[0]] == urgency[p[1]]]
+    diff = [p for p in pairs if urgency[p[0]] != urgency[p[1]]]
     return _mean_similarity(vectors, same), _mean_similarity(vectors, diff)
 
 

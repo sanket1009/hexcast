@@ -227,3 +227,52 @@ def test_baseline_gate_flags_only_real_drops(tmp_path, monkeypatch):
     }
     regressions = compare_to_baseline(run)
     assert len(regressions) == 2
+
+
+# -- Phase 5.1 rules --------------------------------------------------------
+
+
+def test_on_driver_actions_flags_hazards_the_tract_does_not_have():
+    from src.evals.rules import on_driver_actions
+
+    off = _case(
+        drivers=("healthcare_access",),
+        actions=(("Notify patients of heat risk during extreme heat.", "p.pdf, p. 1"),),
+    )
+    on = _case(
+        drivers=("heat",),
+        actions=(("Open cooling centers during extreme heat.", "p.pdf, p. 1"),),
+    )
+    assert (
+        on_driver_actions(off).value == 0.0 and "heat" in on_driver_actions(off).reason
+    )
+    assert on_driver_actions(on).value == 1.0
+
+
+def test_concrete_actions_counts_vague_openings():
+    from src.evals.rules import concrete_actions
+
+    case = _case(
+        actions=(
+            ("Encourage residents to use filters.", "p.pdf, p. 1"),
+            ("Distribute air cleaners through county clinics.", "p.pdf, p. 2"),
+        )
+    )
+    assert concrete_actions(case).value == 0.5
+
+
+def test_urgency_separation_is_zero_when_urgency_levels_share_text():
+    same = "Open cooling centers during heat waves."
+    cases = [
+        _case(geoid=f"0603700{i}", urgency=u, actions=((same, "p.pdf, p. 1"),))
+        for i, u in enumerate(["CRITICAL", "ELEVATED", "CRITICAL", "ELEVATED"])
+    ]
+    assert specificity_metrics(cases)["urgency_separation"] == 0.0
+
+
+def test_air_quality_actions_named_by_device_count_as_accounted():
+    case = _case(
+        drivers=("air_quality",),
+        actions=(("Help residents get portable air cleaners.", "p.pdf, p. 1"),),
+    )
+    assert drivers_accounted(case).value == 1.0

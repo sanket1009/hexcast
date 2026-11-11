@@ -1,6 +1,6 @@
 {
   "manifest": {
-    "git_sha": "c44b6d3",
+    "git_sha": "69f10b2",
     "rankings": "tests/fixtures/evals/retrieval_rankings_v1.json"
   },
   "metrics": {

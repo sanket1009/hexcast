@@ -107,6 +107,41 @@ def test_one_model_call_per_driver_combination():
     assert briefings[0].actions == briefings[1].actions
 
 
+def test_plans_are_written_per_urgency_level():
+    client = FakeClient()
+    gen = _generator(client)
+    gen.generate(_tract("a", ["heat"], urgency="CRITICAL"))
+    gen.generate(_tract("b", ["heat"], urgency="ELEVATED"))
+    gen.generate(_tract("c", ["heat"], urgency="CRITICAL"))
+    assert client.calls == 2
+    assert {p.urgency for p in gen.plans.values()} == {"CRITICAL", "ELEVATED"}
+
+
+def test_plan_prompt_states_the_urgency():
+    prompt = PlanBriefingGenerator._plan_prompt(["heat"], ["residents"], {}, "CRITICAL")
+    assert prompt.startswith("Urgency level: CRITICAL\n")
+    assert not PlanBriefingGenerator._plan_prompt(["heat"], ["r"], {}).startswith(
+        "Urgency"
+    )
+
+
+def test_old_cache_lines_without_urgency_still_load(tmp_path):
+    line = {
+        "key": "heat|vulnerable residents",
+        "drivers": ["heat"],
+        "groups": ["vulnerable residents"],
+        "actions": [],
+        "data_gaps": [],
+        "sources": [],
+        "retrieved_chunk_ids": [],
+        "model": "m",
+        "generated_at": "t",
+    }
+    (tmp_path / "plans.jsonl").write_text(json.dumps(line) + "\n")
+    gen = _generator(FakeClient(), tmp_path)
+    assert gen.plans["heat|vulnerable residents"].urgency == ""
+
+
 def test_uncited_actions_are_dropped():
     b = _generator(FakeClient()).generate(_tract("a", ["heat"]))
     assert [a["action"] for a in b.actions] == ["Open cooling centers."]
@@ -129,6 +164,7 @@ def test_plan_key_ignores_order():
     assert plan_key(["heat", "air_quality"], ["b", "a"]) == plan_key(
         ["air_quality", "heat"], ["a", "b"]
     )
+    assert plan_key(["heat"], ["a"], "CRITICAL") == "CRITICAL|heat|a"
 
 
 def test_template_passes_the_evals():
@@ -185,7 +221,7 @@ def test_groups_do_not_change_the_driver_plan():
     calls_before = client.calls
     gen.generate(_group_tract("b", ["heat"], [OLDER]))
     assert client.calls == calls_before + 1  # only the new group actions
-    assert list(gen.plans) == ["heat|vulnerable residents"]
+    assert list(gen.plans) == ["CRITICAL|heat|vulnerable residents"]
 
 
 def test_group_actions_are_written_once_per_hazard_and_group(tmp_path):

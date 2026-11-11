@@ -61,8 +61,11 @@ GATED: dict[str, tuple[str, float]] = {
     "rules.no_system_talk": ("higher", 0.01),
     "rules.no_jargon": ("higher", 0.02),
     "rules.reading_grade.median": ("lower", 0.5),
+    "rules.on_driver_actions": ("higher", 0.01),
+    "rules.concrete_actions": ("higher", 0.03),
     "specificity.driver_separation": ("higher", 0.03),
     "specificity.group_separation": ("higher", 0.03),
+    "specificity.urgency_separation": ("higher", 0.03),
     "specificity.duplicate_source_sets": ("lower", 0.02),
 }
 
