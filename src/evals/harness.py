@@ -150,23 +150,23 @@ def version_manifest(
     }
 
 
-def save_results(run: EvalRun) -> Path:
-    """Write evals/results/<week>_<time>.json (summary) and .csv (per briefing)."""
+def save_results(run: EvalRun, prefix: str = "") -> Path:
+    """Write evals/results/<prefix><week>_<time>.json (summary) and .csv (per row)."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"{run.week}_{run.manifest['evaluated_at'][:19].replace(':', '')}"
+    stem = f"{prefix}{run.week}_{run.manifest['evaluated_at'][:19].replace(':', '')}"
     summary = {"manifest": run.manifest, "metrics": run.metrics, **run.extras}
     (RESULTS_DIR / f"{stem}.json").write_text(json.dumps(summary, indent=2))
     run.per_briefing.to_csv(RESULTS_DIR / f"{stem}.csv", index=False)
     return RESULTS_DIR / f"{stem}.json"
 
 
-def log_to_mlflow(run: EvalRun, tracking_uri: str) -> str:
+def log_to_mlflow(run: EvalRun, tracking_uri: str, run_name: str | None = None) -> str:
     """One MLflow run per eval run: params = manifest, metrics = aggregates, table = per briefing."""
     import mlflow  # imported here so the scorers and tests do not need MLflow
 
     mlflow.set_tracking_uri(Path(tracking_uri).resolve().as_uri())
     mlflow.set_experiment(EXPERIMENT)
-    with mlflow.start_run(run_name=f"briefings {run.week}") as active:
+    with mlflow.start_run(run_name=run_name or f"briefings {run.week}") as active:
         mlflow.log_params(run.manifest)
         mlflow.log_metrics(
             {k.replace(".", "/"): float(v) for k, v in run.metrics.items()}

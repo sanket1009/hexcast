@@ -68,6 +68,15 @@ jobs:
           EPA_AQS_EMAIL: "test@example.com"
           EPA_AQS_KEY: "test"
 
+      # A9 regression gate (src/evals/gate.py): A2/A4/A5 on the frozen judge
+      # sample and the A1 metric code on frozen retrieval rankings, against
+      # evals/baselines/ci_*.json. Free and offline. Live A1 retrieval needs the
+      # 1.2 GB Qwen3 model and the Chroma index, so it stays a local check.
+      - name: Eval regression gate
+        run: python scripts/eval_gate.py
+        env:
+          PYTHONPATH: .
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v6

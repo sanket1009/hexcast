@@ -1,0 +1,14 @@
+{
+  "manifest": {
+    "git_sha": "c44b6d3",
+    "rankings": "tests/fixtures/evals/retrieval_rankings_v1.json"
+  },
+  "metrics": {
+    "recall@3": 0.3847,
+    "recall@10": 0.6451,
+    "mrr": 0.6975,
+    "ndcg@10": 0.5883,
+    "negative_rejection": 1.0,
+    "empty_rate": 0.0
+  }
+}
