@@ -145,13 +145,13 @@ rag:
 
 evals:
   # A6 LLM-as-judge (src/evals/judge.py). Judge is a stronger model than the
-  # Haiku generator, at temperature 0, with a fixed rubric. Trusted per
+  # Haiku generator, with a fixed rubric. No temperature: the Claude 5.x API
+  # has no sampling setting; verdicts are cached so each is judged once. Trusted per
   # criterion only when its agreement with the user's 20 hand labels reaches
   # min_kappa (quadratic weighted Cohen's kappa; 0.61 is "substantial").
   judge:
     model: "claude-sonnet-5-5"
     max_tokens: 4000
-    temperature: 0
     rubric: "evals/rubrics/briefing_v1.md"
     sample_size: 60
     human_labels: 20

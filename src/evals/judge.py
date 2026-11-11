@@ -13,8 +13,11 @@ Design:
     - Sample: 60 briefings stratified by urgency x driver combination
       (sampling.py), frozen to evals/datasets/judge_sample_v1.jsonl together
       with the excerpt text, so every run and the human sheet see the same input
-    - Judge: config evals.judge.model at temperature 0, structured output
-      (one reason and a 1-5 score per criterion, plus unsafe yes/no)
+    - Judge: config evals.judge.model, structured output (one reason and a
+      1-5 score per criterion, plus unsafe yes/no). The Claude 5.x API takes
+      no temperature setting (anthropic 2.3.0 has no such parameter), so
+      repeatability comes from the fixed rubric, the schema, and the cache:
+      each briefing is judged once and the verdict is reused
     - Reason before score in the schema, so the model explains, then scores
     - Cache: keyed by hash(model + rubric + rendered briefing), committed to
       git, so reruns cost nothing and an edit to the rubric or the briefing
@@ -210,7 +213,6 @@ class Judge:
         cfg = config["evals"]["judge"]
         self.model = cfg["model"]
         self.max_tokens = cfg["max_tokens"]
-        self.temperature = cfg.get("temperature")
         self.max_calls = cfg.get("max_calls")
         self.rubric = Path(cfg["rubric"]).read_text()
         self.rubric_hash = _hash(self.rubric)
@@ -238,7 +240,7 @@ class Judge:
             raise JudgeError(f"Judge call cap of {self.max_calls} reached")
 
         self.calls += 1
-        response, temperature_used = self._parse(render_item(item))
+        response = self._parse(render_item(item))
         if (
             response.stop_reason in ("refusal", "max_tokens")
             or response.parsed_output is None
@@ -263,7 +265,6 @@ class Judge:
             "geoid": item.briefing.geoid,
             "model": self.model,
             "rubric_hash": self.rubric_hash,
-            "temperature": temperature_used,
             "verdict": verdict.model_dump(),
             "input_tokens": getattr(usage, "input_tokens", None),
             "output_tokens": getattr(usage, "output_tokens", None),
@@ -277,26 +278,13 @@ class Judge:
         return record
 
     def _parse(self, content: str):
-        """One structured call. Retries without temperature if the model rejects it."""
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "system": JUDGE_SYSTEM + self.rubric,
-            "messages": [{"role": "user", "content": content}],
-            "output_format": JudgeVerdict,
-        }
-        if self.temperature is not None:
-            try:
-                return (
-                    self.client.messages.parse(**kwargs, temperature=self.temperature),
-                    self.temperature,
-                )
-            except anthropic.BadRequestError as exc:
-                if "temperature" not in str(exc).lower():
-                    raise
-                logger.warning(f"{self.model} rejected temperature; using its default")
-                self.temperature = None
-        return self.client.messages.parse(**kwargs), None
+        return self.client.messages.parse(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=JUDGE_SYSTEM + self.rubric,
+            messages=[{"role": "user", "content": content}],
+            output_format=JudgeVerdict,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -118,7 +118,6 @@ def main() -> int:
         "week": args.week,
         "suite": "judge",
         "judge_model": judge.model,
-        "temperature": str(judge.temperature),
         "rubric": config["evals"]["judge"]["rubric"],
         "rubric_hash": judge.rubric_hash,
         "sample_hash": hashlib.sha256(a6.SAMPLE_PATH.read_bytes()).hexdigest()[:12],

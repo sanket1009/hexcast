@@ -21,7 +21,6 @@ CONFIG = {
         "judge": {
             "model": "claude-sonnet-5-5",
             "max_tokens": 4000,
-            "temperature": 0,
             "rubric": "evals/rubrics/briefing_v1.md",
             "max_calls": 10,
         }
@@ -86,21 +85,14 @@ def _verdict(score=4, unsafe=False):
     )
 
 
-class FakeBadRequestError(Exception):
-    """Stands in for anthropic.BadRequestError (needs an HTTP response to build)."""
-
-
 class FakeClient:
-    def __init__(self, score=4, reject_temperature=False):
+    def __init__(self, score=4):
         self.calls = []
         self.score = score
-        self.reject_temperature = reject_temperature
         self.messages = self
 
     def parse(self, **kwargs):
         self.calls.append(kwargs)
-        if self.reject_temperature and "temperature" in kwargs:
-            raise FakeBadRequestError("temperature is not supported for this model")
         return SimpleNamespace(
             stop_reason="end_turn",
             parsed_output=_verdict(self.score),
@@ -179,7 +171,7 @@ def test_judge_caches_by_input(tmp_path):
     judge = a6.Judge(CONFIG, client=client, cache_path=tmp_path / "cache.jsonl")
     first = judge.judge(items[0])
     assert first["verdict"]["groundedness"]["score"] == 4
-    assert client.calls[0]["temperature"] == 0
+    assert "temperature" not in client.calls[0]
     assert judge.input_tokens == 3000
 
     again = a6.Judge(CONFIG, client=client, cache_path=tmp_path / "cache.jsonl")
@@ -195,15 +187,6 @@ def test_out_of_range_score_is_an_error():
     item = a6.build_sample(_cases(), CHUNKS, "w", n=6, n_human=3)[0]
     with pytest.raises(a6.JudgeError):
         a6.Judge(CONFIG, client=FakeClient(score=7), cache_path=None).judge(item)
-
-
-def test_temperature_rejected_falls_back_to_default(monkeypatch):
-    monkeypatch.setattr(a6.anthropic, "BadRequestError", FakeBadRequestError)
-    item = a6.build_sample(_cases(), CHUNKS, "w", n=6, n_human=3)[0]
-    client = FakeClient(reject_temperature=True)
-    judge = a6.Judge(CONFIG, client=client, cache_path=None)
-    record = judge.judge(item)
-    assert record["temperature"] is None and "temperature" not in client.calls[-1]
 
 
 def test_call_cap():
