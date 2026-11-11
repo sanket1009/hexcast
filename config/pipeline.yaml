@@ -76,6 +76,11 @@ ml:
 
 rag:
   embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  # sentence-transformers prompt_name per model and role (vectorstore.encode_prompt).
+  # Unlisted models encode plain text. Qwen3-Embedding: instruction on queries
+  # only (its card reports a 1-5% retrieval drop without it).
+  embedding_prompts:
+    "Qwen/Qwen3-Embedding-0.6B": {query: "query"}
   chroma_persist_path: "chromadb/chroma_store"
   chroma_collection_name: "chbindex_policy_docs"
   top_k_chunks: 3
@@ -103,7 +108,19 @@ rag:
     # traffic and near-road exposure. Smoke guidance waits for a real-time smoke
     # driver (AirNow); with it in this query, CDPH smoke pages took every slot.
     air_quality: "actions to reduce {group}'s long-term exposure to fine particle pollution near busy roads and freeways, such as high-efficiency indoor air filtration and roadside vegetation barriers"
-    healthcare_access: "actions for health services to reach {group} with limited access to hospitals, such as mobile clinics, street medicine outreach, and heat-illness protocols for health providers and EMTs"
+    # Heat wording removed (Nov 11, 2026): "heat-illness protocols" sent every
+    # access query to the heat plan's clinician-training page, so the access
+    # plan was heat actions.
+    healthcare_access: "actions for health services to reach {group} with limited access to hospitals, such as mobile clinics, street medicine outreach, telehealth, and transportation to medical care"
+  # Group pieces (action_plans.py) use these when set, else driver_queries.
+  # The driver templates are ~30 fixed words, so a 3-4 word group label barely
+  # moved the query: 20 of 21 air quality group slots went to the CARB roadway
+  # advisory and 6 of 7 access groups to one heat plan page. Short, group-first
+  # wording lets the group decide what is retrieved. Heat groups already got
+  # specific pages, so heat keeps its driver template.
+  group_queries:
+    air_quality: "how to protect {group} from fine particle air pollution at home, school, and child care, such as portable air cleaners and better air filters"
+    healthcare_access: "how {group} can get to medical care, such as free rides to medical appointments, language help, and clinics close to home"
 
 logging:
   level: "INFO"

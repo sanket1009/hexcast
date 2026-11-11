@@ -285,7 +285,8 @@ class PlanBriefingGenerator(BriefingGenerator):
         )
 
     def _write_group_actions(self, driver: str, group: str, key: str) -> GroupActions:
-        template = self.driver_queries.get(driver)
+        # Group-first wording when configured; the driver template otherwise
+        template = self.group_queries.get(driver) or self.driver_queries.get(driver)
         if template is None:
             raise BriefingError(f"No retrieval query configured for driver '{driver}'")
         ranked = self.retriever.retrieve(

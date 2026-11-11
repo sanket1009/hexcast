@@ -230,6 +230,30 @@ def test_uncertain_group_is_noted_in_data_gaps():
     assert any("young children" in g for g in b.data_gaps)
 
 
+def test_group_pieces_use_group_queries_when_set():
+    class RecordingRetriever(FakeRetriever):
+        def __init__(self):
+            self.queries = []
+
+        def retrieve(self, query, top_k):
+            self.queries.append(query)
+            return super().retrieve(query, top_k)
+
+    config = {
+        "rag": {
+            **CONFIG["rag"],
+            "group_queries": {"air_quality": "protect {group} from air"},
+        }
+    }
+    retriever = RecordingRetriever()
+    gen = PlanBriefingGenerator(config, retriever=retriever, client=FakeClient())
+    gen.generate(_group_tract("a", ["air_quality"], [OLDER]))
+    gen.generate(_group_tract("b", ["heat"], [OLDER]))
+    assert f"protect {OLDER} from air" in retriever.queries
+    assert f"heat for {OLDER}" in retriever.queries  # no group query: driver template
+    assert "air for vulnerable residents" in retriever.queries  # driver plan unchanged
+
+
 def test_default_group_gets_no_group_actions():
     client = FakeClient()
     gen = _generator(client)
