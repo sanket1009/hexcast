@@ -171,3 +171,25 @@ def test_assign_blocks_to_folds_keeps_blocks_together():
     assert fold[0] == fold[2] and fold[1] == fold[6]
     with pytest.raises(ValueError):
         assign_blocks_to_folds(np.array(["a", "b"]), n_splits=3, random_seed=0)
+
+
+def test_inner_split_stays_inside_outer_train_with_gaps():
+    from src.ml.tuning import inner_split
+
+    rng = np.random.default_rng(2)
+    n_tracts, weeks = 80, np.arange(4, 101)
+    week_idx = np.tile(weeks, n_tracts)
+    groups = np.repeat(rng.integers(0, 30, n_tracts), len(weeks))
+    fold = assign_blocks_to_folds(groups, n_splits=5, random_seed=42)
+    cv = SpaceTimeBlockCV(n_spatial_splits=5, random_seed=42)
+    for info, tr, _ in cv.split(week_idx, groups):
+        k, (start, _) = info["spatial_fold"], info["test_weeks"]
+        in_tr, in_val, inner = inner_split(week_idx, fold, k, start, n_splits=5)
+        assert set(in_tr) <= set(tr) and set(in_val) <= set(tr)
+        assert set(groups[in_tr]).isdisjoint(groups[in_val])
+        val_start, val_end = inner["val_weeks"]
+        assert val_end == start - 5 and val_end - val_start == 7
+        assert (
+            week_idx[in_tr].max() <= val_start - 5
+        )  # inner labels end before validation
+        assert (fold[in_val] == (k + 1) % 5).all()
