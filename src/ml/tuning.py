@@ -236,7 +236,10 @@ def make_logreg(C: float = 1.0):
     return make_pipeline(
         SimpleImputer(strategy="median"),
         StandardScaler(),
-        LogisticRegression(C=C, max_iter=2000),
+        # newton-cholesky: exact Newton steps, suited to many rows and few
+        # features (about 130k x 37 here). It also avoids lbfgs, whose
+        # "iprint" option scipy 1.18 no longer accepts from sklearn 1.7.0.
+        LogisticRegression(C=C, solver="newton-cholesky", max_iter=200),
     )
 
 

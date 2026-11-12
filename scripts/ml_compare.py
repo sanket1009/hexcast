@@ -31,6 +31,7 @@ Writes (gitignored):
 import argparse
 import json
 import time
+import warnings
 from collections import Counter
 from pathlib import Path
 
@@ -62,6 +63,14 @@ from src.ml.tuning import (
     tune_lgbm,
     tune_logreg,
     tune_xgb,
+)
+
+# numpy 2.x on macOS (Apple Accelerate BLAS) raises spurious floating-point
+# warnings inside matmul even when every result is finite. The VM (OpenBLAS)
+# gives identical scores with no warnings. main() checks that every score is
+# finite, so a real overflow would still stop the run.
+warnings.filterwarnings(
+    "ignore", message=".*encountered in matmul", category=RuntimeWarning
 )
 
 OOF_PATH = Path("data/processed/ml/compare_oof.parquet")
@@ -160,6 +169,9 @@ def main() -> int:
             + f"  ({time.time() - t0:.0f} s)"
         )
     oof = pd.concat(parts, ignore_index=True)
+    bad = [s for s in SCORERS if not np.isfinite(oof[s]).all()]
+    if bad:
+        raise ValueError(f"Non-finite scores from {bad}")
 
     summary = {
         "rows": len(df),
