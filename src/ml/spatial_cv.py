@@ -385,3 +385,86 @@ def summarize_cv_folds(
         )
 
     return pd.DataFrame(records)
+
+
+# ---------------------------------------------------------------------------
+# Space-time blocked CV (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+def assign_blocks_to_folds(
+    groups: np.ndarray, n_splits: int, random_seed: int
+) -> np.ndarray:
+    """Fold number (0..n_splits-1) per row; all rows of a block share a fold."""
+    groups = np.asarray(groups)
+    blocks = np.unique(groups)
+    if len(blocks) < n_splits:
+        raise ValueError(f"{len(blocks)} spatial blocks is fewer than {n_splits} folds")
+    rng = np.random.default_rng(random_seed)
+    shuffled = rng.permutation(blocks)
+    block_to_fold = {b: i % n_splits for i, b in enumerate(shuffled)}
+    return np.array([block_to_fold[g] for g in groups])
+
+
+class SpaceTimeBlockCV:
+    """Held-out spatial blocks during a later time window, with an embargo.
+
+    Spatial blocks alone are not enough for the tract-week panel: a row's
+    label covers weeks t+1..t+horizon, so rows a few weeks apart share label
+    weeks, and rows from the same week in other blocks reveal how that week
+    turned out. Each split therefore uses
+
+        test:  rows in spatial fold k AND week in the test window [start, end]
+        train: rows NOT in fold k AND week <= start - embargo_weeks - 1
+
+    With embargo_weeks = horizon, the last training label window ends the
+    week before the test window starts. Test windows are the last
+    n_time_windows blocks of test_window_weeks weeks (expanding training
+    window). Every row in those windows is tested exactly once, so
+    out-of-fold predictions can be pooled.
+    """
+
+    def __init__(
+        self,
+        n_spatial_splits: int = 5,
+        n_time_windows: int = 3,
+        test_window_weeks: int = 8,
+        embargo_weeks: int = 4,
+        random_seed: int = 42,
+    ):
+        self.n_spatial_splits = n_spatial_splits
+        self.n_time_windows = n_time_windows
+        self.test_window_weeks = test_window_weeks
+        self.embargo_weeks = embargo_weeks
+        self.random_seed = random_seed
+
+    def time_windows(self, week_idx: np.ndarray) -> list[tuple[int, int]]:
+        last = int(np.max(week_idx))
+        windows = []
+        for i in range(self.n_time_windows):
+            end = last - (self.n_time_windows - 1 - i) * self.test_window_weeks
+            windows.append((end - self.test_window_weeks + 1, end))
+        first_train_end = windows[0][0] - self.embargo_weeks - 1
+        if first_train_end < int(np.min(week_idx)):
+            raise ValueError("Not enough weeks before the first test window")
+        return windows
+
+    def split(
+        self, week_idx: np.ndarray, groups: np.ndarray
+    ) -> Iterator[tuple[dict[str, Any], np.ndarray, np.ndarray]]:
+        """Yield (info, train_idx, test_idx) for every time window x spatial fold."""
+        week_idx = np.asarray(week_idx)
+        fold = assign_blocks_to_folds(groups, self.n_spatial_splits, self.random_seed)
+        for w, (start, end) in enumerate(self.time_windows(week_idx)):
+            in_window = (week_idx >= start) & (week_idx <= end)
+            train_weeks = week_idx <= start - self.embargo_weeks - 1
+            for k in range(self.n_spatial_splits):
+                test_idx = np.flatnonzero(in_window & (fold == k))
+                train_idx = np.flatnonzero(train_weeks & (fold != k))
+                info = {
+                    "time_window": w,
+                    "spatial_fold": k,
+                    "test_weeks": (start, end),
+                    "train_last_week": start - self.embargo_weeks - 1,
+                }
+                yield info, train_idx, test_idx
