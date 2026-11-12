@@ -1,11 +1,12 @@
 """
-Machine learning modules for CHBIndex.
+Machine learning modules for CHBIndex (Phase 6).
 
-Trains and evaluates models that predict next-week high-risk tracts:
-    features.py     — Feature engineering with H3 spatial lag features
-    spatial_cv.py   — Blocked spatial cross-validation splitter
-    train.py        — Model A (XGBoost), B (spatial), C (LightGBM+constraints)
-    evaluate.py     — DeLong's test A/B comparison, Brier score
-    calibrate.py    — Platt scaling probability calibration
-    equity_audit.py — Fairness analysis by race and income quartile
+Predicts which tracts that are not CRITICAL this week become CRITICAL within
+the next 4 weeks (enters_critical_4w):
+    features.py       tract-week panel, target, leakage checks
+    spatial_cv.py     space-time blocked CV (held-out H3 blocks, later weeks, embargo)
+    tuning.py         nested validation split; XGBoost, monotone LightGBM, logistic regression
+    scoring.py        PR-AUC, ROC-AUC, weekly precision@k
+    compare_stats.py  spatial block bootstrap CIs and DeLong's test
+    report.py         calibration, equity audit, MLflow logging
 """

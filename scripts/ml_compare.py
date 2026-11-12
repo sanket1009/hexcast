@@ -11,8 +11,10 @@ Free: no API calls.
 Scorers (same out-of-fold rows for all):
     index            this week's burden percentile
     recent_critical  weeks CRITICAL among the previous 4, ties by percentile
-    logreg           logistic regression on Model A features (fold-fit
-                     median fill + standardization)
+    logreg           logistic regression on Model A features, sklearn defaults
+                     (fold-fit median fill + standardization)
+    logreg_tuned     logistic regression with C and feature set (A or B)
+                     chosen on the nested validation split: the champion
     xgb_a            tuned XGBoost, Model A features
     xgb_b            tuned XGBoost, Model A + 8-nearest-neighbor lags
     lgbm_c           tuned LightGBM, Model B features, monotone constraints
@@ -26,6 +28,7 @@ Writes (gitignored):
     evals/results/ml/compare_summary.json
 """
 
+import argparse
 import json
 import time
 from collections import Counter
@@ -34,26 +37,32 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 from src.ml.compare_stats import block_bootstrap_diff, delong_paired
 from src.ml.features import (
     MODEL_A_FEATURES,
     MODEL_B_FEATURES,
+    STATIC_FEATURES,
     TARGET,
     engineer_features,
 )
+from src.ml.report import calibration_report, equity_audit, git_sha, log_to_mlflow
 from src.ml.scoring import precision_at_k, ranking_metrics
 from src.ml.spatial_cv import (
     SpaceTimeBlockCV,
     assign_blocks_to_folds,
     build_spatial_groups,
 )
-from src.ml.tuning import fit_lgbm, fit_xgb, inner_split, tune_lgbm, tune_xgb
+from src.ml.tuning import (
+    fit_lgbm,
+    fit_xgb,
+    inner_split,
+    make_logreg,
+    tune_lgbm,
+    tune_logreg,
+    tune_xgb,
+)
 
 OOF_PATH = Path("data/processed/ml/compare_oof.parquet")
 SUMMARY_PATH = Path("evals/results/ml/compare_summary.json")
@@ -63,9 +72,10 @@ MODELS = {
     "xgb_b": (MODEL_B_FEATURES, tune_xgb, fit_xgb),
     "lgbm_c": (MODEL_B_FEATURES, tune_lgbm, fit_lgbm),
 }
-REFERENCE = "logreg"
+REFERENCE = "logreg_tuned"
+FEATURE_SETS = {"A": MODEL_A_FEATURES, "B": MODEL_B_FEATURES}
 N_BOOT = 2000
-SCORERS = ["index", "recent_critical", "logreg", *MODELS]
+SCORERS = ["index", "recent_critical", "logreg", "logreg_tuned", *MODELS]
 
 
 def load_config() -> dict:
@@ -83,15 +93,10 @@ def spatial_groups(df: pd.DataFrame) -> np.ndarray:
     return df["geoid"].map(dict(zip(tracts["geoid"], cells, strict=True))).to_numpy()
 
 
-def logreg() -> object:
-    return make_pipeline(
-        SimpleImputer(strategy="median"),
-        StandardScaler(),
-        LogisticRegression(max_iter=2000),
-    )
-
-
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-mlflow", action="store_true")
+    args = parser.parse_args()
     config = load_config()
     ml = config["ml"]
     seed, n_splits = ml["random_seed"], ml["cv_folds"]
@@ -108,7 +113,7 @@ def main() -> int:
     )
     print(f"Test windows (week_idx): {cv.time_windows(week_idx)}")
 
-    parts, folds, chosen = [], [], {m: [] for m in MODELS}
+    parts, folds, chosen = [], [], {m: [] for m in ["logreg_tuned", *MODELS]}
     t0 = time.time()
     for info, tr, te in cv.split(week_idx, groups):
         k, (start, _) = info["spatial_fold"], info["test_weeks"]
@@ -119,7 +124,7 @@ def main() -> int:
         part["recent_critical"] = (
             df["weeks_critical_prev4"].fillna(0).to_numpy()[te] + part["index"] / 1000
         )
-        lr = logreg().fit(df.iloc[tr][MODEL_A_FEATURES], y[tr])
+        lr = make_logreg().fit(df.iloc[tr][MODEL_A_FEATURES], y[tr])
         part["logreg"] = lr.predict_proba(df.iloc[te][MODEL_A_FEATURES])[:, 1]
 
         in_tr, in_val, inner = inner_split(week_idx, fold, k, start, n_splits)
@@ -131,6 +136,13 @@ def main() -> int:
             "n_inner_train": len(in_tr),
             "n_inner_val": len(in_val),
         }
+        best_lr, lr_trials = tune_logreg(df, y, in_tr, in_val, FEATURE_SETS)
+        lr_cols = FEATURE_SETS[best_lr["features"]]
+        lr_t = make_logreg(best_lr["C"]).fit(df.iloc[tr][lr_cols], y[tr])
+        part["logreg_tuned"] = lr_t.predict_proba(df.iloc[te][lr_cols])[:, 1]
+        chosen["logreg_tuned"].append(best_lr)
+        fold_row["logreg_tuned_params"] = best_lr
+        fold_row["logreg_tuned_trials"] = lr_trials
         for name, (cols, tune, fit) in MODELS.items():
             best, trials = tune(df[cols], y, in_tr, in_val, seed)
             model = fit(df.iloc[tr][cols], y[tr], best, seed)
@@ -197,6 +209,10 @@ def main() -> int:
     print("\nSettings chosen on inner validation (count of 15 outer folds):")
     for name, picks in chosen.items():
         counts = Counter(best_str(p, trees=False) for p in picks)
+        if name == "logreg_tuned":
+            summary["chosen_params"][name] = {"counts": dict(counts)}
+            print(f"  {name}: {dict(counts)}")
+            continue
         trees = [p["n_estimators"] for p in picks]
         summary["chosen_params"][name] = {"counts": dict(counts), "trees": trees}
         print(
@@ -230,15 +246,60 @@ def main() -> int:
             f"ROC-AUC diff {dl['diff']:+.4f} DeLong p {dl['p_value']:.2g}"
         )
 
+    cal = calibration_report(oof, REFERENCE, TARGET)
+    summary["calibration"] = cal
+    print(
+        f"\nCalibration of {REFERENCE}: Brier {cal['brier']:.4f} "
+        f"(base rate only {cal['brier_base_rate_only']:.4f}), ECE {cal['ece']:.4f}"
+    )
+    for w, r in cal["per_window"].items():
+        print(
+            f"  window {w}: mean predicted {r['predicted']:.3f}, observed {r['observed']:.3f}"
+        )
+
+    tracts = df.drop_duplicates("geoid")[["geoid", *STATIC_FEATURES]]
+    eq = equity_audit(oof, tracts, REFERENCE, TARGET, TOP_K_PER_WEEK)
+    summary["equity"] = eq
+    print(
+        f"\nEquity audit of {REFERENCE} (terciles of tracts; top-{TOP_K_PER_WEEK} recall, "
+        "PR-AUC, calibration gap):"
+    )
+    for attr, a in eq.items():
+        cells = "  ".join(
+            f"{t}: recall {r['topk_recall']:.2f} pr {r['pr_auc']:.2f} gap {r['calibration_gap']:+.3f}"
+            for t, r in a["terciles"].items()
+        )
+        print(
+            f"  {attr:<20} {cells}  ratio {a['recall_ratio_min_max']:.2f}"
+            + (f"  FLAG (lowest: {a['lowest_recall_tercile']})" if a["flag"] else "")
+        )
+
+    summary.update(
+        {
+            "reference": REFERENCE,
+            "target": TARGET,
+            "git_sha": git_sha(),
+            "weeks": f"{df['week_start_date'].min():%Y-%m-%d}..{df['week_start_date'].max():%Y-%m-%d}",
+            "test_windows": cv.time_windows(week_idx),
+        }
+    )
+
     OOF_PATH.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     oof.to_parquet(OOF_PATH, index=False)
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2, default=str))
     print(f"\nWrote {OOF_PATH} and {SUMMARY_PATH}")
+    if not args.no_mlflow:
+        run_id = log_to_mlflow(summary, ml["mlflow_tracking_uri"], [SUMMARY_PATH])
+        print(
+            f"MLflow run {run_id} in experiment chbindex-ml ({ml['mlflow_tracking_uri']})"
+        )
     return 0
 
 
 def best_str(p: dict, trees: bool = True) -> str:
+    if "C" in p:
+        return f"{p['features']} C{p['C']}"
     if "num_leaves" in p:
         s = f"leaves{p['num_leaves']} min{p['min_child_samples']}"
     else:

@@ -223,3 +223,44 @@ def test_block_bootstrap_and_delong_detect_a_clear_difference():
     assert same["diff"] == 0 and same["ci_low"] == 0 and same["ci_high"] == 0
     dl = delong_paired(y, good, noise)
     assert dl["diff"] > 0.3 and dl["p_value"] < 1e-6
+
+
+def _toy_oof(n: int = 3000, seed: int = 5) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    p = rng.uniform(0, 0.4, n)
+    return pd.DataFrame(
+        {
+            "geoid": [f"g{i % 300:03d}" for i in range(n)],
+            "week_idx": np.repeat(np.arange(n // 100), 100),
+            "time_window": np.arange(n) * 3 // n,
+            TARGET: (rng.random(n) < p).astype(int),
+            "score": p,
+        }
+    )
+
+
+def test_calibration_report_on_calibrated_scores():
+    from src.ml.report import calibration_report
+
+    rep = calibration_report(_toy_oof(20000), "score", TARGET)
+    assert rep["ece"] < 0.02
+    assert rep["brier"] < rep["brier_base_rate_only"]
+    assert set(rep["per_window"]) == {0, 1, 2}
+
+
+def test_equity_audit_terciles_and_flag():
+    from src.ml.report import equity_audit
+
+    oof = _toy_oof()
+    tracts = pd.DataFrame(
+        {
+            "geoid": [f"g{i:03d}" for i in range(300)],
+            "median_income": np.arange(300) * 1000.0,
+        }
+    )
+    eq = equity_audit(oof, tracts, "score", TARGET, k=10, attributes=["median_income"])
+    a = eq["median_income"]
+    assert list(a["terciles"]) == ["low", "mid", "high"]
+    assert sum(r["tracts"] for r in a["terciles"].values()) == 300
+    assert a["lowest_recall_tercile"] in {"low", "mid", "high"}
+    assert isinstance(a["flag"], bool)

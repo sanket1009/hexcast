@@ -217,3 +217,45 @@ def fit_lgbm(X: pd.DataFrame, y: np.ndarray, params: dict[str, Any], seed: int):
     model = _lgbm(list(X.columns), seed, **params)
     model.fit(X, y)
     return model
+
+
+# ---------------------------------------------------------------------------
+# Logistic regression (champion candidate)
+# ---------------------------------------------------------------------------
+
+LOGREG_C = [0.01, 0.1, 1.0, 10.0]  # inverse L2 strength: smaller = stronger shrinkage
+
+
+def make_logreg(C: float = 1.0):
+    """Median fill + standardize + L2 logistic regression, all fit on the rows given."""
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    return make_pipeline(
+        SimpleImputer(strategy="median"),
+        StandardScaler(),
+        LogisticRegression(C=C, max_iter=2000),
+    )
+
+
+def tune_logreg(
+    df: pd.DataFrame,
+    y: np.ndarray,
+    inner_train: np.ndarray,
+    inner_val: np.ndarray,
+    feature_sets: dict[str, list[str]],
+    c_values: list[float] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Best (C, feature set) on inner validation PR-AUC."""
+    trials = []
+    for name, cols in feature_sets.items():
+        for C in c_values or LOGREG_C:
+            model = make_logreg(C).fit(df.iloc[inner_train][cols], y[inner_train])
+            score = average_precision_score(
+                y[inner_val], model.predict_proba(df.iloc[inner_val][cols])[:, 1]
+            )
+            trials.append({"features": name, "C": C, "val_pr_auc": score})
+    best = max(trials, key=lambda t: t["val_pr_auc"])
+    return {"features": best["features"], "C": best["C"]}, trials
