@@ -118,3 +118,102 @@ def fit_xgb(
     model = xgb.XGBClassifier(random_state=seed, n_jobs=-1, **XGB_FIXED, **params)
     model.fit(X, y)
     return model
+
+
+# ---------------------------------------------------------------------------
+# Model C: LightGBM with monotone constraints
+# ---------------------------------------------------------------------------
+
+# Features whose effect on risk has a known direction. All four index
+# components are signed so that higher means more burden (raw_burden is their
+# sum), so every constrained feature is +1. Deltas stay free: the data shows
+# both "dropped out and comes back" and "rising into CRITICAL" entries. Static
+# ACS/CDC/ER fields stay free so they can interact with burden.
+MONOTONE_INCREASING = {
+    "burden_percentile",
+    "raw_burden",
+    "pm25_z",
+    "lst_z",
+    "access_z",
+    "vulnerability_z",
+    "pct_lag_1w",
+    "pct_lag_2w",
+    "pct_lag_4w",
+    "pct_mean_4w",
+    "weeks_critical_prev4",
+    "pm25_1w",
+    "lst_mean_c",
+    "nbr_pct_mean",
+    "nbr_critical_share",
+}
+
+LGBM_GRID = {
+    "num_leaves": [4, 8, 16],
+    "min_child_samples": [20, 100, 400],
+}
+LGBM_FIXED = {
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.8,
+    "monotone_constraints_method": "advanced",
+    "verbose": -1,
+}
+
+
+def monotone_constraints(features: list[str]) -> list[int]:
+    return [1 if f in MONOTONE_INCREASING else 0 for f in features]
+
+
+def _lgbm(features: list[str], seed: int, **params):
+    import lightgbm as lgb
+
+    return lgb.LGBMClassifier(
+        random_state=seed,
+        n_jobs=-1,
+        monotone_constraints=monotone_constraints(features),
+        **LGBM_FIXED,
+        **params,
+    )
+
+
+def tune_lgbm(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    inner_train: np.ndarray,
+    inner_val: np.ndarray,
+    seed: int,
+    space: dict[str, list] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Same contract as tune_xgb, for monotone-constrained LightGBM."""
+    import lightgbm as lgb
+
+    features = list(X.columns)
+    trials = []
+    for params in grid(space or LGBM_GRID):
+        model = _lgbm(features, seed, n_estimators=MAX_TREES, **params)
+        model.fit(
+            X.iloc[inner_train],
+            y[inner_train],
+            eval_set=[(X.iloc[inner_val], y[inner_val])],
+            eval_metric="average_precision",
+            callbacks=[lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)],
+        )
+        score = average_precision_score(
+            y[inner_val], model.predict_proba(X.iloc[inner_val])[:, 1]
+        )
+        trials.append(
+            {
+                **params,
+                "n_estimators": max(int(model.best_iteration_ or 0), 1),
+                "val_pr_auc": score,
+            }
+        )
+    best = max(trials, key=lambda t: t["val_pr_auc"])
+    return {k: v for k, v in best.items() if k != "val_pr_auc"}, trials
+
+
+def fit_lgbm(X: pd.DataFrame, y: np.ndarray, params: dict[str, Any], seed: int):
+    model = _lgbm(list(X.columns), seed, **params)
+    model.fit(X, y)
+    return model

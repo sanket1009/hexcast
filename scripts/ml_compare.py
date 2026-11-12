@@ -15,6 +15,11 @@ Scorers (same out-of-fold rows for all):
                      median fill + standardization)
     xgb_a            tuned XGBoost, Model A features
     xgb_b            tuned XGBoost, Model A + 8-nearest-neighbor lags
+    lgbm_c           tuned LightGBM, Model B features, monotone constraints
+
+Then: spatial block bootstrap 95% CI of the PR-AUC difference and DeLong's
+test (optimistic: assumes independent rows) for logreg against every other
+scorer.
 
 Writes (gitignored):
     data/processed/ml/compare_oof.parquet
@@ -35,6 +40,7 @@ from sklearn.metrics import average_precision_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from src.ml.compare_stats import block_bootstrap_diff, delong_paired
 from src.ml.features import (
     MODEL_A_FEATURES,
     MODEL_B_FEATURES,
@@ -47,12 +53,18 @@ from src.ml.spatial_cv import (
     assign_blocks_to_folds,
     build_spatial_groups,
 )
-from src.ml.tuning import fit_xgb, inner_split, tune_xgb
+from src.ml.tuning import fit_lgbm, fit_xgb, inner_split, tune_lgbm, tune_xgb
 
 OOF_PATH = Path("data/processed/ml/compare_oof.parquet")
 SUMMARY_PATH = Path("evals/results/ml/compare_summary.json")
 TOP_K_PER_WEEK = 50
-MODELS = {"xgb_a": MODEL_A_FEATURES, "xgb_b": MODEL_B_FEATURES}
+MODELS = {
+    "xgb_a": (MODEL_A_FEATURES, tune_xgb, fit_xgb),
+    "xgb_b": (MODEL_B_FEATURES, tune_xgb, fit_xgb),
+    "lgbm_c": (MODEL_B_FEATURES, tune_lgbm, fit_lgbm),
+}
+REFERENCE = "logreg"
+N_BOOT = 2000
 SCORERS = ["index", "recent_critical", "logreg", *MODELS]
 
 
@@ -102,6 +114,7 @@ def main() -> int:
         k, (start, _) = info["spatial_fold"], info["test_weeks"]
         part = df.iloc[te][["geoid", "week_idx", "week_start_date", TARGET]].copy()
         part["time_window"], part["spatial_fold"] = info["time_window"], k
+        part["block"] = groups[te]
         part["index"] = df["burden_percentile"].to_numpy()[te]
         part["recent_critical"] = (
             df["weeks_critical_prev4"].fillna(0).to_numpy()[te] + part["index"] / 1000
@@ -118,9 +131,9 @@ def main() -> int:
             "n_inner_train": len(in_tr),
             "n_inner_val": len(in_val),
         }
-        for name, cols in MODELS.items():
-            best, trials = tune_xgb(df[cols], y, in_tr, in_val, seed)
-            model = fit_xgb(df.iloc[tr][cols], y[tr], best, seed)
+        for name, (cols, tune, fit) in MODELS.items():
+            best, trials = tune(df[cols], y, in_tr, in_val, seed)
+            model = fit(df.iloc[tr][cols], y[tr], best, seed)
             part[name] = model.predict_proba(df.iloc[te][cols])[:, 1]
             chosen[name].append(best)
             fold_row[f"{name}_params"] = best
@@ -132,7 +145,7 @@ def main() -> int:
         print(
             f"  window {info['time_window']} fold {k}: "
             + "  ".join(f"{s} {fold_row[s]['pr_auc']:.3f}" for s in SCORERS)
-            + f"  | a {best_str(chosen['xgb_a'][-1])}  ({time.time() - t0:.0f} s)"
+            + f"  ({time.time() - t0:.0f} s)"
         )
     oof = pd.concat(parts, ignore_index=True)
 
@@ -191,6 +204,32 @@ def main() -> int:
             f"(range {min(trees)}-{max(trees)})"
         )
 
+    print(
+        f"\n{REFERENCE} against each scorer (PR-AUC difference, spatial block bootstrap, "
+        f"{N_BOOT} draws; DeLong on ROC-AUC, optimistic):"
+    )
+    summary["comparisons"] = {}
+    yv, blocks = oof[TARGET].to_numpy(), oof["block"].to_numpy()
+    for other in [s for s in SCORERS if s != REFERENCE]:
+        boot = block_bootstrap_diff(
+            yv,
+            oof[REFERENCE].to_numpy(),
+            oof[other].to_numpy(),
+            blocks,
+            n_boot=N_BOOT,
+            seed=seed,
+        )
+        dl = delong_paired(yv, oof[REFERENCE].to_numpy(), oof[other].to_numpy())
+        summary["comparisons"][f"{REFERENCE}_vs_{other}"] = {
+            "pr_auc_bootstrap": boot,
+            "delong": dl,
+        }
+        print(
+            f"  vs {other:<16} PR-AUC diff {boot['diff']:+.3f} "
+            f"[{boot['ci_low']:+.3f}, {boot['ci_high']:+.3f}]  "
+            f"ROC-AUC diff {dl['diff']:+.4f} DeLong p {dl['p_value']:.2g}"
+        )
+
     OOF_PATH.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     oof.to_parquet(OOF_PATH, index=False)
@@ -200,7 +239,10 @@ def main() -> int:
 
 
 def best_str(p: dict, trees: bool = True) -> str:
-    s = f"d{p['max_depth']} mcw{p['min_child_weight']}"
+    if "num_leaves" in p:
+        s = f"leaves{p['num_leaves']} min{p['min_child_samples']}"
+    else:
+        s = f"d{p['max_depth']} mcw{p['min_child_weight']}"
     return f"{s} t{p['n_estimators']}" if trees else s
 
 

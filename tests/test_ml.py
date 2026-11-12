@@ -193,3 +193,33 @@ def test_inner_split_stays_inside_outer_train_with_gaps():
             week_idx[in_tr].max() <= val_start - 5
         )  # inner labels end before validation
         assert (fold[in_val] == (k + 1) % 5).all()
+
+
+def test_weighted_ap_matches_sklearn_with_ties():
+    from sklearn.metrics import average_precision_score
+
+    from src.ml.compare_stats import _presort, _weighted_ap_presorted
+
+    rng = np.random.default_rng(3)
+    y = (rng.random(500) < 0.1).astype(float)
+    score = np.round(rng.random(500) + y * 0.3, 1)  # many ties
+    order, groups = _presort(score)
+    ours = _weighted_ap_presorted(y[order], np.ones(500), groups)
+    assert ours == pytest.approx(average_precision_score(y, score))
+
+
+def test_block_bootstrap_and_delong_detect_a_clear_difference():
+    from src.ml.compare_stats import block_bootstrap_diff, delong_paired
+
+    rng = np.random.default_rng(4)
+    n = 4000
+    y = (rng.random(n) < 0.1).astype(int)
+    good = y + rng.normal(0, 0.5, n)
+    noise = rng.normal(0, 1, n)
+    blocks = rng.integers(0, 60, n)
+    boot = block_bootstrap_diff(y, good, noise, blocks, n_boot=300)
+    assert boot["ci_low"] > 0 and boot["share_le_0"] == 0
+    same = block_bootstrap_diff(y, good, good, blocks, n_boot=50)
+    assert same["diff"] == 0 and same["ci_low"] == 0 and same["ci_high"] == 0
+    dl = delong_paired(y, good, noise)
+    assert dl["diff"] > 0.3 and dl["p_value"] < 1e-6
