@@ -185,15 +185,25 @@ def complete_grid(weekly: pd.DataFrame) -> pd.DataFrame:
 
     Shifts below are by row within a tract, so a missing tract-week would
     silently turn a 1-week lag into a 2-week lag. Reindexing to the full grid
-    makes a missing week show up as NaN instead.
+    (every tract x every Monday from the first to the last stored week) makes a
+    missing tract-week, or a whole week the backfill skipped, show up as NaN.
+    A NaN week is never eligible itself, and add_target leaves the label NaN
+    for any row whose 4-week window touches it, so those rows drop out too.
     """
     df = weekly.copy()
     df["week_start_date"] = pd.to_datetime(df["week_start_date"])
-    weeks = np.sort(df["week_start_date"].unique())
-    gaps = np.diff(weeks).astype("timedelta64[D]").astype(int)
-    if len(gaps) and (gaps != 7).any():
+    stored = np.sort(df["week_start_date"].unique())
+    gaps = np.diff(stored).astype("timedelta64[D]").astype(int)
+    if len(gaps) and (gaps % 7 != 0).any():
         raise ValueError(
-            f"Weeks are not consecutive (gaps in days: {sorted(set(gaps))})"
+            f"Week starts are not 7 days apart (gaps in days: {sorted(set(gaps))})"
+        )
+    weeks = pd.date_range(stored[0], stored[-1], freq="7D")
+    missing = weeks.difference(pd.DatetimeIndex(stored))
+    if len(missing):
+        logger.warning(
+            f"{len(missing)} week(s) missing from the record, kept as NaN rows: "
+            f"{[d.strftime('%Y-%m-%d') for d in missing]}"
         )
     grid = pd.MultiIndex.from_product(
         [np.sort(df["geoid"].unique()), weeks], names=["geoid", "week_start_date"]

@@ -115,11 +115,26 @@ def test_complete_grid_missing_week_is_nan_not_shifted():
     assert np.isnan(row["burden_percentile"]) and np.isnan(row["is_critical"])
 
 
-def test_complete_grid_rejects_gaps():
+def test_skipped_week_becomes_nan_and_blocks_its_label_windows():
+    weekly, static = toy_inputs()
+    skipped = WEEK0 + pd.Timedelta(weeks=7)
+    p = build_panel(weekly[weekly["week_start_date"] != skipped], static)
+    assert p["week_idx"].nunique() == N_WEEKS
+    wk = p[p["week_idx"] == 7]
+    assert wk["burden_percentile"].isna().all() and not wk["eligible"].any()
+    # Rows whose window t+1..t+4 includes week 7 (t = 3..6) get no label.
+    assert p.loc[p["week_idx"].between(3, 6), TARGET].isna().all()
+    assert not p.loc[p["week_idx"].between(3, 6), "eligible"].any()
+    # Week 8's lag-1 is the skipped week: NaN, not week 6's value.
+    assert p.loc[p["week_idx"] == 8, "pct_lag_1w"].isna().all()
+
+
+def test_complete_grid_rejects_off_cycle_dates():
     weekly, _ = toy_inputs()
-    gap = weekly["week_start_date"] != WEEK0 + pd.Timedelta(weeks=5)
-    with pytest.raises(ValueError, match="not consecutive"):
-        complete_grid(weekly[gap])
+    m = weekly["week_start_date"] == WEEK0 + pd.Timedelta(weeks=5)
+    weekly.loc[m, "week_start_date"] += pd.Timedelta(days=2)
+    with pytest.raises(ValueError, match="not 7 days apart"):
+        complete_grid(weekly)
 
 
 def test_check_no_leakage():
