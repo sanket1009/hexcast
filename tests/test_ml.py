@@ -171,3 +171,96 @@ def test_assign_blocks_to_folds_keeps_blocks_together():
     assert fold[0] == fold[2] and fold[1] == fold[6]
     with pytest.raises(ValueError):
         assign_blocks_to_folds(np.array(["a", "b"]), n_splits=3, random_seed=0)
+
+
+def test_inner_split_stays_inside_outer_train_with_gaps():
+    from src.ml.tuning import inner_split
+
+    rng = np.random.default_rng(2)
+    n_tracts, weeks = 80, np.arange(4, 101)
+    week_idx = np.tile(weeks, n_tracts)
+    groups = np.repeat(rng.integers(0, 30, n_tracts), len(weeks))
+    fold = assign_blocks_to_folds(groups, n_splits=5, random_seed=42)
+    cv = SpaceTimeBlockCV(n_spatial_splits=5, random_seed=42)
+    for info, tr, _ in cv.split(week_idx, groups):
+        k, (start, _) = info["spatial_fold"], info["test_weeks"]
+        in_tr, in_val, inner = inner_split(week_idx, fold, k, start, n_splits=5)
+        assert set(in_tr) <= set(tr) and set(in_val) <= set(tr)
+        assert set(groups[in_tr]).isdisjoint(groups[in_val])
+        val_start, val_end = inner["val_weeks"]
+        assert val_end == start - 5 and val_end - val_start == 7
+        assert (
+            week_idx[in_tr].max() <= val_start - 5
+        )  # inner labels end before validation
+        assert (fold[in_val] == (k + 1) % 5).all()
+
+
+def test_weighted_ap_matches_sklearn_with_ties():
+    from sklearn.metrics import average_precision_score
+
+    from src.ml.compare_stats import _presort, _weighted_ap_presorted
+
+    rng = np.random.default_rng(3)
+    y = (rng.random(500) < 0.1).astype(float)
+    score = np.round(rng.random(500) + y * 0.3, 1)  # many ties
+    order, groups = _presort(score)
+    ours = _weighted_ap_presorted(y[order], np.ones(500), groups)
+    assert ours == pytest.approx(average_precision_score(y, score))
+
+
+def test_block_bootstrap_and_delong_detect_a_clear_difference():
+    from src.ml.compare_stats import block_bootstrap_diff, delong_paired
+
+    rng = np.random.default_rng(4)
+    n = 4000
+    y = (rng.random(n) < 0.1).astype(int)
+    good = y + rng.normal(0, 0.5, n)
+    noise = rng.normal(0, 1, n)
+    blocks = rng.integers(0, 60, n)
+    boot = block_bootstrap_diff(y, good, noise, blocks, n_boot=300)
+    assert boot["ci_low"] > 0 and boot["share_le_0"] == 0
+    same = block_bootstrap_diff(y, good, good, blocks, n_boot=50)
+    assert same["diff"] == 0 and same["ci_low"] == 0 and same["ci_high"] == 0
+    dl = delong_paired(y, good, noise)
+    assert dl["diff"] > 0.3 and dl["p_value"] < 1e-6
+
+
+def _toy_oof(n: int = 3000, seed: int = 5) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    p = rng.uniform(0, 0.4, n)
+    return pd.DataFrame(
+        {
+            "geoid": [f"g{i % 300:03d}" for i in range(n)],
+            "week_idx": np.repeat(np.arange(n // 100), 100),
+            "time_window": np.arange(n) * 3 // n,
+            TARGET: (rng.random(n) < p).astype(int),
+            "score": p,
+        }
+    )
+
+
+def test_calibration_report_on_calibrated_scores():
+    from src.ml.report import calibration_report
+
+    rep = calibration_report(_toy_oof(20000), "score", TARGET)
+    assert rep["ece"] < 0.02
+    assert rep["brier"] < rep["brier_base_rate_only"]
+    assert set(rep["per_window"]) == {0, 1, 2}
+
+
+def test_equity_audit_terciles_and_flag():
+    from src.ml.report import equity_audit
+
+    oof = _toy_oof()
+    tracts = pd.DataFrame(
+        {
+            "geoid": [f"g{i:03d}" for i in range(300)],
+            "median_income": np.arange(300) * 1000.0,
+        }
+    )
+    eq = equity_audit(oof, tracts, "score", TARGET, k=10, attributes=["median_income"])
+    a = eq["median_income"]
+    assert list(a["terciles"]) == ["low", "mid", "high"]
+    assert sum(r["tracts"] for r in a["terciles"].values()) == 300
+    assert a["lowest_recall_tercile"] in {"low", "mid", "high"}
+    assert isinstance(a["flag"], bool)
