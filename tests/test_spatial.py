@@ -228,6 +228,8 @@ def test_short_pm25_window_logs_a_warning(monkeypatch):
         lambda q, c: _weekly(5).assign(pm25_weeks=2),
     )
     monkeypatch.setattr(compound_score.logger, "warning", warnings.append)
+    # start of the record: no window week has monitor data without Kriging
+    monkeypatch.setattr(compound_score, "_check_window_complete", lambda *a: None)
     compound_score._load_signals(
         {"full_fips": "06037"}, "2025-06-30", pm25_window_weeks=4
     )

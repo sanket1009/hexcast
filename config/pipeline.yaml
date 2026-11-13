@@ -48,6 +48,17 @@ spatial:
     - "max"
   lst_min_pixel_count: 10
 
+# Dashboard-facing derived tables (Phase 7)
+product:
+  h3_resolution: 9              # hex map; res 8 hid 448 small dense tracts (src/spatial/hex_grid.py)
+  chronic_window_weeks: 52      # chronic burden: CRITICAL in >= 26 of the last 52 weeks
+  chronic_min_weeks: 26
+  confidence_draws: 200         # joint PM2.5-error + weight draws per week (src/spatial/confidence.py)
+  confidence_weight_jitter: 0.10
+  confidence_seed: 0
+  confidence_high: 0.9          # class kept in >= 90% of draws -> HIGH
+  confidence_low: 0.5           # kept in < 50% -> LOW
+
 ml:
   random_seed: 42
   cv_folds: 5

@@ -13,6 +13,10 @@ Tasks:
     healthcare_access  E2SFCA on the road network                -> healthcare_access
     compound_score     signed z-score composite, burden classes  -> compound_scores
     hotspots           Getis-Ord Gi* and Moran's I               -> hotspot_detection
+    chronic            weeks CRITICAL in the last 52               -> tract_chronic
+    confidence         class agreement under correlated Kriging error and
+                       +/-10% weights (src/spatial/confidence.py) -> tract_confidence
+                       (dashboard tables; they do not hold up alerts)
     drift_check        input and output drift vs the trailing 8 weeks -> drift_checks
                        (warns, never fails the run; src/ml/drift.py)
     trigger_alert_dispatch  starts alert_dispatch_<city> for the same week,
@@ -110,6 +114,20 @@ def build_spatial_dag(city: str):
             return df["hotspot_class"].value_counts().to_dict()
 
         @task(**warehouse_pool())
+        def chronic(week: str) -> int:
+            from src.spatial.chronic import compute_chronic
+
+            df = compute_chronic(project_config(city), week)
+            return int(df["is_chronic"].fillna(False).sum())
+
+        @task(**warehouse_pool())
+        def confidence(week: str) -> dict:
+            from src.spatial.confidence import compute_confidence
+
+            df = compute_confidence(project_config(city), week)
+            return df["confidence"].value_counts().to_dict()
+
+        @task(**warehouse_pool())
         def drift_check(week: str) -> dict:
             from src.ml.drift import check_drift
 
@@ -141,6 +159,7 @@ def build_spatial_dag(city: str):
         )
         gate = notify_requested()
         inputs >> score >> [hotspots(week), drift_check(week)] >> gate
+        score >> [chronic(week), confidence(week)]
         gate >> [start_alerts, start_retrain]
 
     return spatial_transform()
