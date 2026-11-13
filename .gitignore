@@ -79,6 +79,7 @@ __pycache__/
 *.shx
 data/raw/
 data/processed/
+data/models/
 data/features/
 data/warehouse/
 data/object_store/
