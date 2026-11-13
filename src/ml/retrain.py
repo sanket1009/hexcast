@@ -18,6 +18,9 @@ retrain(config, as_of)
        MIN_COMPARE_POSITIVES entrants; otherwise the gate alone decides.
     5. A promoted candidate is refit on all labeled rows and saved as a new
        version; current.json points at it.
+    0. Before any of this: if the current model was already trained through
+       the newest labeled week, there is nothing new to learn from, so the
+       run keeps it (a rerun of the same week must not create a duplicate).
 
 score_week(config, week)
     Score every non-CRITICAL tract of the week with the current model and
@@ -141,6 +144,21 @@ def retrain(
     panel = load_panel(config, as_of=as_of)
     labeled = panel[panel["eligible"]].copy()
     labeled[TARGET] = labeled[TARGET].astype(int)
+    newest = labeled["week_start_date"].max()
+    current, meta = load_current(model_dir)
+    if meta and meta.get("features") == FEATURES and meta.get("trained_through"):
+        if pd.Timestamp(meta["trained_through"]) >= newest:
+            logger.info(
+                f"Retrain as of {pd.Timestamp(as_of).date()}: current model {meta['version']} "
+                f"already trained through {meta['trained_through']}; kept"
+            )
+            return {
+                "as_of": str(pd.Timestamp(as_of).date()),
+                "promoted": False,
+                "reason": "no new labeled weeks since the current model",
+                "version": meta["version"],
+                "current_version": meta["version"],
+            }
     train, hold = promotion_split(labeled)
     if train.empty or hold[TARGET].nunique() < 2:
         raise ValueError(
@@ -151,7 +169,6 @@ def retrain(
     cand_score = _ap(hold, candidate.predict_proba(hold[FEATURES])[:, 1])
     base = {k: _ap(hold, v) for k, v in baseline_scores(hold).items()}
 
-    current, meta = load_current(model_dir)
     cand_oos = cur_score = None
     compare_rows = 0
     if current is not None and meta.get("features") == FEATURES:
@@ -179,6 +196,13 @@ def retrain(
         "current_pr_auc_unseen": cur_score,
         "current_version": meta["version"] if meta else None,
         "promoted": promote,
+        "reason": (
+            "beat baselines and current model"
+            if promote and cur_score is not None
+            else "beat baselines; no comparable current model"
+            if promote
+            else "did not beat baselines or current model"
+        ),
     }
     if promote:
         final = make_logreg().fit(labeled[FEATURES], labeled[TARGET])

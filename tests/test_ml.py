@@ -329,3 +329,29 @@ def test_save_and_load_model_version(tmp_path):
     loaded, got = load_current(tmp_path)
     assert got == meta and got["file"] == "v1.joblib"
     assert np.allclose(loaded.predict_proba(X), model.predict_proba(X))
+
+
+def test_retrain_keeps_current_when_no_new_labeled_weeks(tmp_path, monkeypatch):
+    import src.ml.retrain as rt
+    from src.ml.features import MODEL_A_FEATURES
+    from src.ml.tuning import make_logreg
+
+    weekly, static = toy_inputs()
+    for col in MODEL_A_FEATURES:
+        if col not in weekly.columns:
+            static[col] = 1.0
+    panel = build_panel(weekly, static)
+    monkeypatch.setattr(rt, "load_panel", lambda config, as_of=None: panel)
+    newest = panel.loc[panel["eligible"], "week_start_date"].max()
+    rt.save_version(
+        make_logreg(),
+        {
+            "version": "v1",
+            "features": rt.FEATURES,
+            "trained_through": f"{newest:%Y-%m-%d}",
+        },
+        tmp_path,
+    )
+    out = rt.retrain({}, as_of=WEEK0, model_dir=tmp_path, log_mlflow=False)
+    assert out["promoted"] is False and out["version"] == "v1"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["current.json", "v1.joblib"]
