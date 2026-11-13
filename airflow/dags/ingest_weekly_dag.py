@@ -8,11 +8,13 @@ Tasks:
     pull_pm25           EPA AQS monitor readings for the week -> epa_pm25_raw
     pull_lst            Landsat land surface temperature raster for the week
     trigger_spatial_transform  starts spatial_transform_<city> for the same week
-    reference_requested gate: runs the three refresh tasks only when asked
+    reference_requested gate: runs the refresh tasks only when asked
     refresh_tracts      Census TIGER tracts and buffer tracts
     refresh_cdc_places  CDC PLACES health outcomes
     refresh_hospitals   CDPH hospitals
     refresh_reporting_areas  tract -> SPA, Health District, community (after tracts)
+    refresh_census_blocks    Census 2020 block population, dashboard hex mask (after tracts)
+    refresh_acs              ACS vulnerability and race/ethnicity (after tracts)
 
 Which week:
     EPA AQS data arrives months late, so a scheduled run processes the
@@ -20,8 +22,8 @@ Which week:
     a specific week (a backfill, or a rerun), trigger with
     {"week_start": "2026-06-22"}. Any date snaps back to its Monday.
 
-Reference data (tracts, reporting areas, PLACES, hospitals) changes yearly or monthly and
-is already loaded, so weekly runs skip it. Trigger with
+Reference data (tracts, reporting areas, blocks, ACS, PLACES, hospitals)
+changes yearly or monthly and is already loaded, so weekly runs skip it. Trigger with
 {"refresh_reference": true} to reload it.
 
 Reruns are safe: PM2.5 rows replace their week and city, and an LST
@@ -142,6 +144,23 @@ def build_ingest_dag(city: str):
 
             return len(pull_reporting_areas(project_config(city)))
 
+        @task
+        def refresh_census_blocks() -> int:
+            from src.ingestion.census_blocks import pull_census_blocks
+
+            return len(pull_census_blocks(project_config(city)))
+
+        @task
+        def refresh_acs() -> dict:
+            from src.ingestion.acs_race_ethnicity import pull_acs_race_ethnicity
+            from src.ingestion.acs_vulnerability import pull_acs_vulnerability
+
+            config = project_config(city)
+            return {
+                "acs_vulnerability": len(pull_acs_vulnerability(config)),
+                "acs_race_ethnicity": len(pull_acs_race_ethnicity(config)),
+            }
+
         week = resolve_week()
         start_spatial = TriggerDagRunOperator(
             task_id="trigger_spatial_transform",
@@ -151,9 +170,9 @@ def build_ingest_dag(city: str):
         [pull_pm25(week), pull_lst(week)] >> start_spatial
         gate = reference_requested()
         gate >> [refresh_cdc_places(), refresh_hospitals()]
-        (
-            gate >> refresh_tracts() >> refresh_reporting_areas()
-        )  # areas are assigned to the new tracts
+        # areas, blocks and ACS rows are checked against the new tracts
+        tracts = gate >> refresh_tracts()
+        tracts >> [refresh_reporting_areas(), refresh_census_blocks(), refresh_acs()]
 
     return ingest_weekly()
 
