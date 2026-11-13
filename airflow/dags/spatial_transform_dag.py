@@ -13,8 +13,11 @@ Tasks:
     healthcare_access  E2SFCA on the road network                -> healthcare_access
     compound_score     signed z-score composite, burden classes  -> compound_scores
     hotspots           Getis-Ord Gi* and Moran's I               -> hotspot_detection
+    drift_check        input and output drift vs the trailing 8 weeks -> drift_checks
+                       (warns, never fails the run; src/ml/drift.py)
     trigger_alert_dispatch  starts alert_dispatch_<city> for the same week,
-                       unless the run has {"notify": false} (backfills)
+    trigger_model_retrain   and model_retrain_<city>, unless the run has
+                       {"notify": false} (backfills)
 
 The first three are independent, but with the local DuckDB backend they share
 the 1-slot duckdb_writer pool and run one at a time (DuckDB allows a single
@@ -106,6 +109,16 @@ def build_spatial_dag(city: str):
             df = detect_hotspots(project_config(city), week_start=week_start(week))
             return df["hotspot_class"].value_counts().to_dict()
 
+        @task(**warehouse_pool())
+        def drift_check(week: str) -> dict:
+            from src.ml.drift import check_drift
+
+            try:
+                return check_drift(project_config(city), week_start(week))
+            except Exception as exc:  # monitoring must never block scoring
+                print(f"Drift check skipped: {type(exc).__name__}: {exc}")
+                return {"skipped": str(exc)}
+
         week = resolve_week()
         inputs = [run_kriging(week), process_lst(week), healthcare_access(week)]
         score = compound_score(week)
@@ -121,7 +134,14 @@ def build_spatial_dag(city: str):
                 "week_start": week
             },  # briefings stay off: those runs are started by hand
         )
-        inputs >> score >> hotspots(week) >> notify_requested() >> start_alerts
+        start_retrain = TriggerDagRunOperator(
+            task_id="trigger_model_retrain",
+            trigger_dag_id=f"model_retrain_{city}",
+            conf={"week_start": week},
+        )
+        gate = notify_requested()
+        inputs >> score >> [hotspots(week), drift_check(week)] >> gate
+        gate >> [start_alerts, start_retrain]
 
     return spatial_transform()
 

@@ -264,3 +264,68 @@ def test_equity_audit_terciles_and_flag():
     assert sum(r["tracts"] for r in a["terciles"].values()) == 300
     assert a["lowest_recall_tercile"] in {"low", "mid", "high"}
     assert isinstance(a["flag"], bool)
+
+
+def test_psi_zero_for_same_distribution_and_large_for_shift():
+    from src.ml.drift import psi
+
+    rng = np.random.default_rng(6)
+    a = rng.normal(0, 1, 5000)
+    assert psi(a, rng.normal(0, 1, 5000)) < 0.02
+    assert psi(a, rng.normal(1.5, 1, 5000)) > 0.25
+
+
+def test_drift_status_directions():
+    from src.ml.drift import status
+
+    assert status("pm25_level", -3.5) == "major" and status("pm25_level", 0.5) == "ok"
+    assert status("critical_jaccard", 0.25) == "major"
+    assert status("critical_jaccard", 0.40) == "moderate"
+    assert (
+        status("monitors_ratio", 0.7) == "major"
+        and status("monitors_ratio", 1.02) == "ok"
+    )
+    assert (
+        status("kriging_mae_ratio", 0.5) == "ok"
+        and status("kriging_mae_ratio", 2.5) == "major"
+    )
+    assert status("lst_coverage", float("nan")) == "missing"
+
+
+def test_promotion_split_has_embargo_and_decide():
+    from src.ml.retrain import decide, promotion_split
+
+    labeled = pd.DataFrame({"week_idx": np.repeat(np.arange(4, 60), 10)})
+    train, hold = promotion_split(labeled, holdout_weeks=8)
+    assert hold["week_idx"].min() == 52 and hold["week_idx"].max() == 59
+    assert train["week_idx"].max() == 52 - 4 - 1
+    base = {"index": 0.40, "recent_critical": 0.43}
+    assert decide(0.5, base)  # no comparable current model
+    assert decide(0.5, base, 0.48, 0.48) and not decide(0.5, base, 0.47, 0.48)
+    assert not decide(0.42, base)  # must beat every baseline
+
+
+def test_scoring_rows_are_last_week_non_critical():
+    from src.ml.features import scoring_rows
+
+    weekly, static = toy_inputs()
+    p = build_panel(weekly, static)
+    rows = scoring_rows(p)
+    assert (rows["week_idx"] == N_WEEKS - 1).all()
+    assert (rows["is_critical"] == 0).all()
+    assert rows[TARGET].isna().all()  # the future is unknown
+
+
+def test_save_and_load_model_version(tmp_path):
+    from src.ml.retrain import load_current, save_version
+    from src.ml.tuning import make_logreg
+
+    rng = np.random.default_rng(7)
+    X = pd.DataFrame({"a": rng.normal(size=200), "b": rng.normal(size=200)})
+    y = (X["a"] + rng.normal(size=200) > 0).astype(int)
+    model = make_logreg().fit(X, y)
+    assert load_current(tmp_path) == (None, None)
+    meta = save_version(model, {"version": "v1", "features": ["a", "b"]}, tmp_path)
+    loaded, got = load_current(tmp_path)
+    assert got == meta and got["file"] == "v1.joblib"
+    assert np.allclose(loaded.predict_proba(X), model.predict_proba(X))

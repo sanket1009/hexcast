@@ -319,6 +319,34 @@ def check_no_leakage(feature_cols: list[str]) -> None:
         raise ValueError(f"Feature columns look like future/label columns: {bad}")
 
 
+def load_panel(config: dict[str, Any], as_of: Any = None) -> pd.DataFrame:
+    """Full panel (all rows, with eligible flag) built only from weeks <= as_of.
+
+    Cutting the weekly inputs before building means a run for a past week sees
+    exactly what it would have seen live: the newest labeled rows are
+    HORIZON_WEEKS before as_of, and nothing after as_of reaches any feature.
+    """
+    check_no_leakage(MODEL_B_FEATURES)
+    weekly, static = load_inputs(config)
+    if as_of is not None:
+        weeks = pd.to_datetime(weekly["week_start_date"])
+        weekly = weekly[weeks <= pd.Timestamp(as_of)]
+        if weekly.empty:
+            raise ValueError(f"No weekly inputs on or before {as_of}")
+    return build_panel(weekly, static)
+
+
+def scoring_rows(panel: pd.DataFrame) -> pd.DataFrame:
+    """Rows of the panel's last week that a model can score: not CRITICAL now,
+    full lag history. Their labels are unknown (the next 4 weeks are the future)."""
+    last = panel["week_idx"].max()
+    return panel[
+        (panel["week_idx"] == last)
+        & (panel["is_critical"] == 0)
+        & (panel["week_idx"] >= HISTORY_WEEKS)
+    ].reset_index(drop=True)
+
+
 def engineer_features(config: dict[str, Any]) -> pd.DataFrame:
     """Eligible training rows with ids, Model B features (a superset of A) and target."""
     check_no_leakage(MODEL_B_FEATURES)
