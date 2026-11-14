@@ -25,7 +25,8 @@ retrain(config, as_of)
 score_week(config, week)
     Score every non-CRITICAL tract of the week with the current model and
     write ml_predictions (probability of becoming CRITICAL within 4 weeks,
-    rank within the week, model version).
+    rank within the week, model version) and ml_contributions (each feature's
+    log-odds term, src/ml/contributions.py).
 
 The model is logistic regression on Model A features with sklearn defaults:
 in the Phase 6 comparison it beat tuned XGBoost and monotone LightGBM, and
@@ -47,6 +48,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score
 
+from src.ml.contributions import CONTRIBUTIONS_TABLE, feature_contributions
 from src.ml.features import (
     HORIZON_WEEKS,
     MODEL_A_FEATURES,
@@ -310,6 +312,16 @@ def score_week(
     out = predict_week(panel, model, meta)
     out["city_fips"] = config["full_fips"]
     write_dataframe(out, PREDICTIONS_TABLE, config, write_disposition=REPLACE_PARTITION)
+
+    # Per-feature log-odds terms for the dashboard's "why this tract"
+    rows = scoring_rows(panel)
+    contrib = feature_contributions(model, rows, meta["features"])
+    contrib["model_version"] = meta["version"]
+    contrib["week_start_date"] = pd.Timestamp(week).date()
+    contrib["city_fips"] = config["full_fips"]
+    write_dataframe(
+        contrib, CONTRIBUTIONS_TABLE, config, write_disposition=REPLACE_PARTITION
+    )
     logger.info(
         f"Scored {len(out):,} tracts for {week} with {meta['version']}; "
         f"top probability {out['prob_critical_4w'].max():.3f}"
