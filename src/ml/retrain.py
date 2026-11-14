@@ -140,13 +140,25 @@ def retrain(
     as_of: Any,
     model_dir: Path = MODEL_DIR,
     log_mlflow: bool = True,
+    force: bool = False,
 ) -> dict[str, Any]:
+    """
+    force: retrain even when no new weeks are labeled, e.g. after past
+    weeks were rescored (2026-11-13: 30 year-1 weeks fixed). The candidate
+    must still beat both baselines on the holdout; the current model is
+    skipped as a comparison because every holdout week is one it saw.
+    """
     panel = load_panel(config, as_of=as_of)
     labeled = panel[panel["eligible"]].copy()
     labeled[TARGET] = labeled[TARGET].astype(int)
     newest = labeled["week_start_date"].max()
     current, meta = load_current(model_dir)
-    if meta and meta.get("features") == FEATURES and meta.get("trained_through"):
+    if (
+        not force
+        and meta
+        and meta.get("features") == FEATURES
+        and meta.get("trained_through")
+    ):
         if pd.Timestamp(meta["trained_through"]) >= newest:
             logger.info(
                 f"Retrain as of {pd.Timestamp(as_of).date()}: current model {meta['version']} "

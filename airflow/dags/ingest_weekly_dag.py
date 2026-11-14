@@ -13,7 +13,7 @@ Tasks:
     refresh_cdc_places  CDC PLACES health outcomes
     refresh_hospitals   CDPH hospitals
     refresh_reporting_areas  tract -> SPA, Health District, community (after tracts)
-    refresh_census_blocks    Census 2020 block population, dashboard hex mask (after tracts)
+    refresh_census_blocks    Census 2020 block population, then the H3 hex table (after tracts)
     refresh_acs              ACS vulnerability and race/ethnicity (after tracts)
 
 Which week:
@@ -147,8 +147,11 @@ def build_ingest_dag(city: str):
         @task
         def refresh_census_blocks() -> int:
             from src.ingestion.census_blocks import pull_census_blocks
+            from src.spatial.hex_grid import build_hex_table
 
-            return len(pull_census_blocks(project_config(city)))
+            config = project_config(city)
+            pull_census_blocks(config)
+            return len(build_hex_table(config))
 
         @task
         def refresh_acs() -> dict:

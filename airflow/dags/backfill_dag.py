@@ -15,8 +15,12 @@ Tasks:
                       is recorded and skipped, not fatal
     spatial_confs     the weeks that have both PM2.5 and LST
     trigger_spatial   one spatial_transform_<city> run per week with
-                      {"notify": false}, so history sends no emails. The spatial
-                      DAG runs one week at a time, so these queue in order
+                      {"notify": false}, so history sends no emails. One week
+                      at a time, oldest first, each waiting for the run to
+                      finish: the 4-week PM2.5 mean needs the earlier weeks'
+                      Kriging. (max_active_runs=1 on the spatial DAG alone
+                      does not order runs; 30 weeks of the 2024-25 backfill
+                      were scored with short windows that way.)
 
 Reruns are safe: every table replaces its week, and existing LST rasters
 are reused.
@@ -107,7 +111,7 @@ def build_backfill_dag(city: str):
         @task
         def spatial_confs(pm25: dict, lst: list[dict]) -> list[dict]:
             lst_ok = {r["week"] for r in lst if r["raster"]}
-            ready = [w for w in pm25["weeks_written"] if w in lst_ok]
+            ready = sorted(w for w in pm25["weeks_written"] if w in lst_ok)
             skipped = sorted(
                 set(pm25["weeks_missing"]) | {r["week"] for r in lst if not r["raster"]}
             )
@@ -121,6 +125,9 @@ def build_backfill_dag(city: str):
         TriggerDagRunOperator.partial(
             task_id="trigger_spatial",
             trigger_dag_id=f"spatial_transform_{city}",
+            wait_for_completion=True,
+            poke_interval=30,
+            max_active_tis_per_dagrun=1,  # map index order = week order
         ).expand(conf=confs)
 
     return backfill()

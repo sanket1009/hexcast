@@ -355,3 +355,8 @@ def test_retrain_keeps_current_when_no_new_labeled_weeks(tmp_path, monkeypatch):
     out = rt.retrain({}, as_of=WEEK0, model_dir=tmp_path, log_mlflow=False)
     assert out["promoted"] is False and out["version"] == "v1"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["current.json", "v1.joblib"]
+
+    # force (after past weeks were rescored) skips the shortcut and goes on
+    # to train; this toy panel is too short to train, which shows it got there
+    with pytest.raises(ValueError, match="Not enough labeled history"):
+        rt.retrain({}, as_of=WEEK0, model_dir=tmp_path, log_mlflow=False, force=True)

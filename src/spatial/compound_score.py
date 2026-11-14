@@ -270,6 +270,7 @@ def _load_signals(
 
     weeks_used = int(df["pm25_weeks"].min())
     if weeks_used < pm25_window_weeks:
+        _check_window_complete(config, start_str, week_str)
         logger.warning(
             f"PM2.5 window: {weeks_used} of {pm25_window_weeks} weeks available "
             f"from {start_str} to {week_str}"
@@ -277,6 +278,42 @@ def _load_signals(
     df = df.drop(columns="pm25_weeks")
     df = _fill_low_coverage_lst(df, config, week_str)
     return df.merge(_load_vulnerability(config), on="geoid", how="left")
+
+
+def _check_window_complete(
+    config: dict[str, Any], start_str: str, week_str: str
+) -> None:
+    """
+    Refuse to score while a window week has monitor data but no Kriging yet.
+
+    A week can be missing from pm25_kriged for two reasons: no monitor data
+    (start of the record; the mean then uses the weeks that exist) or its
+    Kriging has not run yet. The second silently shortened the window for
+    30 backfill weeks (2024-07-01 to 2025-06-09) when spatial runs were
+    triggered out of week order. Score weeks oldest first.
+    """
+    fips = config["full_fips"]
+    late = read_query(
+        f"""
+        SELECT DISTINCT CAST(r.week_start_date AS VARCHAR) AS week
+        FROM {{dataset}}.epa_pm25_raw r
+        WHERE r.city_fips = '{fips}'
+          AND r.week_start_date BETWEEN '{start_str}' AND '{week_str}'
+          AND r.week_start_date NOT IN (
+              SELECT DISTINCT week_start_date FROM {{dataset}}.pm25_kriged
+              WHERE city_fips = '{fips}'
+                AND week_start_date BETWEEN '{start_str}' AND '{week_str}'
+          )
+        ORDER BY week
+        """,
+        config,
+    )
+    if not late.empty:
+        weeks = ", ".join(late["week"].str[:10])
+        raise ValueError(
+            f"PM2.5 window for {week_str} is missing Kriging for {weeks}, which "
+            f"have monitor data. Score weeks oldest first (scripts/rescore_weeks.py)."
+        )
 
 
 def _load_vulnerability(config: dict[str, Any]) -> pd.DataFrame:
