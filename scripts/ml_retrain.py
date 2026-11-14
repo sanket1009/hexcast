@@ -31,6 +31,11 @@ def main() -> int:
     parser.add_argument("--week", required=True, help="Monday, YYYY-MM-DD")
     parser.add_argument("--score-only", action="store_true")
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="retrain even with no new labeled weeks (after rescoring past weeks)",
+    )
+    parser.add_argument(
         "--drift", action="store_true", help="also run the drift checks"
     )
     args = parser.parse_args()
@@ -38,7 +43,11 @@ def main() -> int:
     config = load_config(args.city)
     week = date.fromisoformat(args.week)
     if not args.score_only:
-        print(json.dumps(retrain(config, as_of=week), indent=2, default=str))
+        print(
+            json.dumps(
+                retrain(config, as_of=week, force=args.force), indent=2, default=str
+            )
+        )
     preds = score_week(config, week)
     print(f"\nTop 10 of {len(preds):,} non-CRITICAL tracts for {week}:")
     print(
