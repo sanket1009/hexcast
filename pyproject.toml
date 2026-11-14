@@ -67,7 +67,7 @@ target-version = "py312"
 
 # Which files and folders to lint
 # We only lint our own code — not generated files or notebooks
-include = ["src/**/*.py", "tests/**/*.py", "airflow/dags/**/*.py"]
+include = ["src/**/*.py", "tests/**/*.py", "airflow/dags/**/*.py", "dashboard/**/*.py"]
 
 # Files and folders to completely ignore
 exclude = [
@@ -115,7 +115,7 @@ ignore = [
 # 1. Standard library (os, sys, pathlib)
 # 2. Third party (geopandas, xgboost, fastapi)
 # 3. Local (src.utils.config_loader)
-known-first-party = ["src", "chbindex_common"]
+known-first-party = ["src", "chbindex_common", "ui"]  # ui = dashboard/ui
 # The repo has local mlflow/ and chromadb/ data folders. Without this, ruff
 # on a laptop treats those packages as first-party and CI (no such folders)
 # does not, so the two sort imports differently and CI fails.
