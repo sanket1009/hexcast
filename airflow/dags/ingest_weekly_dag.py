@@ -119,12 +119,15 @@ def build_ingest_dag(city: str):
                 pull_buffer_tracts,
                 pull_tract_geometries,
             )
+            from src.spatial.tract_outlines import build_tract_outlines
 
             config = project_config(city)
-            return {
+            counts = {
                 "tracts": len(pull_tract_geometries(config)),
                 "buffer_tracts": len(pull_buffer_tracts(config)),
             }
+            counts["tract_outlines"] = len(build_tract_outlines(config))
+            return counts
 
         @task
         def refresh_cdc_places() -> int:

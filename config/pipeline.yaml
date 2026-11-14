@@ -58,6 +58,8 @@ product:
   confidence_seed: 0
   confidence_high: 0.9          # class kept in >= 90% of draws -> HIGH
   confidence_low: 0.5           # kept in < 50% -> LOW
+  watchlist_threshold: 0.5      # watch-list KPI: P(enters CRITICAL within 4 weeks) >= this
+  api_cache_seconds: 600        # API keeps each week's tables in memory this long
 
 ml:
   random_seed: 42

@@ -5,6 +5,7 @@ Build the dashboard tables for a range of stored weeks.
     tract_confidence  correlated Kriging error + weight simulation
                       (src/spatial/confidence.py)
     h3_hexes          populated H3 cells (--hexes; not weekly)
+    tract_outlines    simplified tract GeoJSON for the map (--hexes; not weekly)
 
 The weekly spatial_transform DAG builds the first two for new weeks; this
 script fills history. Each week's Kriging error factor is cached and
@@ -20,6 +21,7 @@ import time
 from src.spatial.chronic import compute_chronic
 from src.spatial.confidence import compute_confidence
 from src.spatial.hex_grid import build_hex_table
+from src.spatial.tract_outlines import build_tract_outlines
 from src.utils.bigquery import read_query
 from src.utils.config_loader import load_config
 
@@ -29,13 +31,16 @@ def main() -> None:
     parser.add_argument("--first", required=True)
     parser.add_argument("--last", required=True)
     parser.add_argument("--city", default="los_angeles")
-    parser.add_argument("--hexes", action="store_true", help="also rebuild h3_hexes")
+    parser.add_argument(
+        "--hexes", action="store_true", help="also rebuild h3_hexes and tract_outlines"
+    )
     parser.add_argument("--skip-confidence", action="store_true")
     args = parser.parse_args()
 
     config = load_config(args.city)
     if args.hexes:
         build_hex_table(config)
+        build_tract_outlines(config)
 
     weeks = read_query(
         f"""
