@@ -20,6 +20,7 @@ Endpoints (week is YYYY-MM-DD or "latest"):
     GET /weeks/{week}/watchlist         top tracts by probability of entering CRITICAL
     GET /weeks/{week}/equity            share of each group living in CRITICAL tracts
     GET /weeks/{week}/validation        drift checks, CES agreement, weekly pipeline health
+    GET /evaluation                     watch-list model and RAG evaluation results
     GET /trends?geoids=...              weekly burden series for up to 20 tracts
     GET /hexes                          populated H3 cells and their main tract
     GET /outlines                       tract outlines, GeoJSON
@@ -164,6 +165,11 @@ def equity(svc: Svc, week: WeekParam) -> dict:
 @app.get("/weeks/{week}/validation", response_model=schemas.Validation)
 def validation(svc: Svc, week: WeekParam) -> dict:
     return svc.validation(svc.resolve_week(week))
+
+
+@app.get("/evaluation", response_model=schemas.Evaluation)
+def evaluation(svc: Svc) -> dict:
+    return svc.evaluation()
 
 
 @app.get("/trends", response_model=list[schemas.TrendPoint])

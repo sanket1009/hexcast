@@ -851,6 +851,151 @@ class Service:
         out = out.round({"kriging_loo_mae": 3, "lst_coverage": 4})
         return records(out.sort_values("week_start_date"))
 
+    # -------------------------------------------------------------- evaluation
+
+    def evaluation(self) -> dict[str, Any]:
+        """
+        Model and RAG evaluation results from eval_summary (src/evals/publish.py).
+
+        Not tied to a week: the watch-list model was evaluated once, out of
+        fold over three test windows, and the briefing and retrieval scores
+        are the accepted baselines. Each suite is None when not published.
+        """
+        df = self.cache.get(
+            "evaluation",
+            lambda: self._q(
+                "SELECT * FROM {dataset}.eval_summary WHERE city_fips = @city"
+            ),
+        )
+        if df.empty:
+            raise NotFoundError(
+                "No evaluation results published; run scripts/publish_evals.py"
+            )
+        return {
+            "ml": self._ml_eval(df[df["suite"] == "ml"]),
+            "briefings": self._baseline_eval(df[df["suite"] == "briefings"]),
+            "retrieval": self._baseline_eval(df[df["suite"] == "retrieval"]),
+        }
+
+    @staticmethod
+    def _baseline_eval(df: pd.DataFrame) -> dict[str, Any] | None:
+        if df.empty:
+            return None
+        first = df.iloc[0]
+        return {
+            "model": _none(first["model"]),
+            "detail": _none(first["detail"]),
+            "git_sha": _none(first["git_sha"]),
+            "evaluated_at": _none(first["evaluated_at"]),
+            "metrics": {r.metric: float(r.value) for r in df.itertuples()},
+        }
+
+    @staticmethod
+    def _ml_eval(df: pd.DataFrame) -> dict[str, Any] | None:
+        if df.empty:
+            return None
+
+        def part(section: str) -> pd.DataFrame:
+            return df[df["section"] == section]
+
+        def wide(section: str, index: list[str]) -> pd.DataFrame:
+            return (
+                part(section)
+                .pivot_table(
+                    index=index, columns="metric", values="value", aggfunc="first"
+                )
+                .reset_index()
+            )
+
+        panel = part("panel").set_index("metric")
+        ref = panel.loc["reference"]
+
+        pooled = wide("pooled", ["model"]).sort_values("pr_auc", ascending=False)
+
+        windows = []
+        win = part("window")
+        for sub, rows in win.groupby("subgroup", sort=True):
+            base = rows[rows["metric"] == "base_rate"]["value"]
+            scores = rows[rows["metric"] == "pr_auc"]
+            windows.append(
+                {
+                    "window": int(sub),
+                    "base_rate": float(base.iloc[0]),
+                    "pr_auc": dict(
+                        zip(scores["model"], scores["value"].astype(float), strict=True)
+                    ),
+                }
+            )
+
+        comp = wide("comparison", ["model"])
+        n_boot = part("comparison").groupby("model")["n"].max()
+        comp["n_boot"] = comp["model"].map(n_boot).astype("Int64")
+
+        cal = part("calibration").set_index("metric")["value"]
+        rel = wide("reliability", ["subgroup"])
+        rel["n"] = rel["subgroup"].map(
+            part("reliability").groupby("subgroup")["n"].first()
+        )
+        rel["bin"] = rel["subgroup"].astype(int)
+
+        eq = wide("equity", ["subgroup"])
+        eq[["attribute", "tercile"]] = eq["subgroup"].str.split(":", n=1, expand=True)
+        eq["tracts"] = eq["subgroup"].map(
+            part("equity").groupby("subgroup")["n"].first()
+        )
+        summ = part("equity_summary")
+        ratio = summ[summ["metric"] == "recall_ratio_min_max"].set_index("subgroup")
+        flag = summ[summ["metric"] == "flag"].set_index("subgroup")["value"]
+        equity_summary = [
+            {
+                "attribute": attr,
+                "recall_ratio_min_max": float(r["value"]),
+                "lowest_recall_tercile": _none(r["detail"]),
+                "flag": bool(flag.get(attr, 0)),
+            }
+            for attr, r in ratio.iterrows()
+        ]
+
+        return {
+            "evaluated_at": _none(df["evaluated_at"].iloc[0]),
+            "git_sha": _none(df["git_sha"].iloc[0]),
+            "reference": ref["model"],
+            "target": _none(ref["detail"]),
+            "weeks": _none(panel.loc["rows", "detail"]),
+            "rows": int(panel.loc["rows", "value"]),
+            "test_rows": int(panel.loc["test_rows", "value"]),
+            "base_rate": float(panel.loc["base_rate", "value"]),
+            "test_windows": int(panel.loc["test_windows", "value"]),
+            "top_k": int(panel.loc["top_k_per_week", "value"])
+            if "top_k_per_week" in panel.index
+            else None,
+            "scorers": records(pooled),
+            "windows": windows,
+            "comparisons": records(comp),
+            "calibration": {
+                "brier": float(cal["brier"]),
+                "brier_base_rate_only": float(cal["brier_base_rate_only"]),
+                "ece": float(cal["ece"]),
+                "reliability": records(
+                    rel[["bin", "predicted", "observed", "n"]].sort_values("bin")
+                ),
+            },
+            "equity": records(
+                eq[
+                    [
+                        "attribute",
+                        "tercile",
+                        "tracts",
+                        "base_rate",
+                        "pr_auc",
+                        "topk_recall",
+                        "calibration_gap",
+                    ]
+                ]
+            ),  # fmt: skip
+            "equity_summary": equity_summary,
+        }
+
     # ------------------------------------------------------------------ search
 
     def search(self, q: str, limit: int = 10) -> list[dict[str, Any]]:
