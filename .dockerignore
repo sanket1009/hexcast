@@ -3,5 +3,11 @@
 *
 !docker/requirements-airflow.txt
 !docker/requirements-api.txt
+!docker/requirements-dashboard.txt
 !src/
 !config/
+!dashboard/
+
+# Never ship bytecode or local test caches
+**/__pycache__
+**/.pytest_cache

@@ -1,115 +1,126 @@
 # =============================================================================
-# CHBIndex — Continuous Deployment
+# CHBIndex: Continuous Deployment to Cloud Run
 # =============================================================================
-# Runs ONLY when code is pushed to main branch.
-# Purpose: automatically deploy the FastAPI container to GCP Cloud Run.
+# Builds the API and dashboard images, pushes them to Artifact Registry and
+# deploys two Cloud Run services:
 #
-# What it does:
-#   1. Builds the FastAPI Docker image
-#   2. Pushes it to Google Artifact Registry
-#   3. Deploys it to GCP Cloud Run
+#   chbindex-api        private: only the dashboard's service account may
+#                       call it (Cloud Run IAM). Reads BigQuery.
+#   chbindex-dashboard  public. Calls the API with a Google ID token.
 #
-# Prerequisites (set these in GitHub repo Settings → Secrets):
-#   GCP_PROJECT_ID          — your GCP project ID
-#   GCP_SERVICE_ACCOUNT_KEY — base64-encoded service account JSON key
-#   GCP_REGION              — deployment region (e.g. us-central1)
+# Auth is keyless (Workload Identity Federation): GitHub's OIDC token for this
+# repo's main branch is exchanged for short-lived credentials of the deployer
+# service account. No JSON key exists anywhere.
+#
+# One-time setup: scripts/gcp/setup_cloud_run.sh, then set the repository
+# variables it prints (Settings > Secrets and variables > Actions > Variables):
+#   GCP_PROJECT_ID, GCP_REGION, GCP_WIF_PROVIDER, GCP_DEPLOYER_SA
+# Until GCP_WIF_PROVIDER is set the job is skipped, so pushes stay green.
 # =============================================================================
 
 name: Deploy to Cloud Run
 
-# Trigger: only on pushes to main
-# This means: only deploy reviewed, approved, merged code
-# Never deploy directly from feature branches
-#
-# Currently manual only (Actions tab -> Run workflow). Restore the push
-# trigger below once src/serving/api.py exists and the GCP secrets
-# (GCP_PROJECT_ID, GCP_SERVICE_ACCOUNT_KEY, GCP_REGION) are set.
-#   push:
-#     branches: ["main"]
 on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/serving/**"
+      - "src/utils/**"
+      - "dashboard/**"
+      - "config/**"
+      - "docker/Dockerfile.api"
+      - "docker/Dockerfile.dashboard"
+      - "docker/requirements-api.txt"
+      - "docker/requirements-dashboard.txt"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
+
+concurrency:
+  # Never two deploys at once; a newer push waits for the running one
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/chbindex
+  API_SA: chbindex-api@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+  DASHBOARD_SA: chbindex-dashboard@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
 
 jobs:
   deploy:
+    if: vars.GCP_WIF_PROVIDER != ''
     runs-on: ubuntu-latest
-
-    # Required permissions for Google Cloud authentication
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write     # needed for Workload Identity Federation
+      id-token: write # lets the job request GitHub's OIDC token
 
     steps:
-      # Step 1 — Check out code
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      # Step 2 — Authenticate to Google Cloud
-      # Uses the service account key stored in GitHub Secrets
-      # Never hardcode credentials — always use secrets
-      - name: Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud (Workload Identity)
         uses: google-github-actions/auth@v3
         with:
-          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
 
-      # Step 3 — Set up Google Cloud SDK
-      # Gives us the gcloud CLI tool for subsequent steps
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - uses: google-github-actions/setup-gcloud@v3
 
-      # Step 4 — Configure Docker to use Google Artifact Registry
-      # Allows docker push to push images to GCP's container registry
-      - name: Configure Docker for GCP
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      # Images are tagged with the commit SHA, so any deploy can be rolled back
+      # to a known commit (gcloud run services update-traffic --to-revisions)
+      - name: Build and push images
         run: |
-          gcloud auth configure-docker \
-            ${{ secrets.GCP_REGION }}-docker.pkg.dev --quiet
+          for name in api dashboard; do
+            docker build -f docker/Dockerfile.$name -t "$REGISTRY/$name:$GITHUB_SHA" .
+            docker push "$REGISTRY/$name:$GITHUB_SHA"
+          done
 
-      # Step 5 — Build the FastAPI Docker image
-      # Tags the image with the git commit SHA for traceability
-      # You can always roll back to a specific commit's image
-      - name: Build Docker image
-        run: |
-          docker build \
-            -f docker/Dockerfile.api \
-            -t ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/chbindex/api:${{ github.sha }} \
-            -t ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/chbindex/api:latest \
-            .
-
-      # Step 6 — Push image to Google Artifact Registry
-      # Both the commit-SHA tag and 'latest' tag get pushed
-      # 'latest' is what Cloud Run deploys by default
-      - name: Push Docker image
-        run: |
-          docker push \
-            ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/chbindex/api:${{ github.sha }}
-          docker push \
-            ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/chbindex/api:latest
-
-      # Step 7 — Deploy to Cloud Run
-      # Cloud Run pulls the latest image and starts serving it
-      # --region: where to deploy
-      # --platform managed: fully managed Cloud Run (no Kubernetes needed)
-      # --allow-unauthenticated: public API — no auth token required to call it
-      # --memory 1Gi: 1GB RAM per instance (enough for BigQuery queries)
-      # --max-instances 3: scale up to 3 instances under load
-      #                    free tier gives 2M requests/month
-      - name: Deploy to Cloud Run
+      # Private API: no --allow-unauthenticated. min-instances 0 means no
+      # cost when idle (a cold start takes a few seconds); max-instances caps spend.
+      - name: Deploy API
         run: |
           gcloud run deploy chbindex-api \
-            --image ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/chbindex/api:latest \
-            --region ${{ secrets.GCP_REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --memory 1Gi \
-            --max-instances 3 \
-            --set-env-vars GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
+            --image "$REGISTRY/api:$GITHUB_SHA" \
+            --region ${{ vars.GCP_REGION }} \
+            --service-account "$API_SA" \
+            --no-allow-unauthenticated \
+            --port 8000 \
+            --cpu 1 --memory 1Gi \
+            --min-instances 0 --max-instances 2 \
+            --set-env-vars CHBINDEX_BACKEND=gcp,GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+          # Idempotent: the dashboard may call the API
+          gcloud run services add-iam-policy-binding chbindex-api \
+            --region ${{ vars.GCP_REGION }} \
+            --member "serviceAccount:$DASHBOARD_SA" \
+            --role roles/run.invoker
 
-      # Step 8 — Print the deployed URL
-      # This URL is your live FastAPI endpoint
-      # Add it to your resume and GitHub README
-      - name: Get deployed URL
+      # Public dashboard. Session affinity keeps a browser's websocket on one
+      # instance when Cloud Run runs two.
+      - name: Deploy dashboard
         run: |
-          gcloud run services describe chbindex-api \
-            --region ${{ secrets.GCP_REGION }} \
-            --format 'value(status.url)'
+          API_URL=$(gcloud run services describe chbindex-api \
+            --region ${{ vars.GCP_REGION }} --format 'value(status.url)')
+          gcloud run deploy chbindex-dashboard \
+            --image "$REGISTRY/dashboard:$GITHUB_SHA" \
+            --region ${{ vars.GCP_REGION }} \
+            --service-account "$DASHBOARD_SA" \
+            --allow-unauthenticated \
+            --session-affinity \
+            --cpu 1 --memory 1Gi \
+            --min-instances 0 --max-instances 2 \
+            --set-env-vars CHBINDEX_API_URL=$API_URL,CHBINDEX_API_AUDIENCE=$API_URL
+
+      - name: Smoke test
+        run: |
+          API_URL=$(gcloud run services describe chbindex-api \
+            --region ${{ vars.GCP_REGION }} --format 'value(status.url)')
+          DASH_URL=$(gcloud run services describe chbindex-dashboard \
+            --region ${{ vars.GCP_REGION }} --format 'value(status.url)')
+          # The API must refuse anonymous calls...
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$API_URL/health")
+          case "$code" in 401|403) ;; *) echo "API answered $code to an anonymous call"; exit 1 ;; esac
+          # ...and the dashboard must be up
+          curl -sf "$DASH_URL/_stcore/health"
+          echo "Dashboard: $DASH_URL" >> "$GITHUB_STEP_SUMMARY"

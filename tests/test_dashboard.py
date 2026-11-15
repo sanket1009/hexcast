@@ -250,3 +250,27 @@ def test_overview_reads_tracts_from_the_url(at):
     at.run()
     assert not at.exception
     assert at.multiselect(key="tracts").value == [C]
+
+
+def test_private_api_gets_a_bearer_token_reused_until_refresh(monkeypatch):
+    calls = []
+
+    def fake_fetch(audience):
+        calls.append(audience)
+        return f"token-{len(calls)}"
+
+    monkeypatch.setattr(ui_api, "AUDIENCE", "https://chbindex-api.example.run.app")
+    monkeypatch.setattr(ui_api, "_fetch_id_token", fake_fetch)
+    monkeypatch.setitem(ui_api._token, "value", None)
+    assert ui_api._auth_headers() == {"Authorization": "Bearer token-1"}
+    assert ui_api._auth_headers() == {"Authorization": "Bearer token-1"}  # cached
+    monkeypatch.setitem(
+        ui_api._token, "at", ui_api._token["at"] - ui_api.TOKEN_REFRESH - 1
+    )
+    assert ui_api._auth_headers() == {"Authorization": "Bearer token-2"}  # refreshed
+    assert calls == ["https://chbindex-api.example.run.app"] * 2
+
+
+def test_no_audience_means_no_auth_header(monkeypatch):
+    monkeypatch.setattr(ui_api, "AUDIENCE", "")
+    assert ui_api._auth_headers() == {}

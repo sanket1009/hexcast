@@ -1,0 +1,36 @@
+# =============================================================================
+# CHBIndex — Streamlit Dashboard Container
+# =============================================================================
+# Public dashboard on Cloud Run. Reads only from the private API
+# (CHBINDEX_API_URL), authenticating with an ID token for its service account
+# (CHBINDEX_API_AUDIENCE); see dashboard/ui/api.py.
+#
+# Build:  docker build -f docker/Dockerfile.dashboard -t chbindex-dashboard .
+# Run:    docker run -p 8501:8080 -e CHBINDEX_API_URL=http://host.docker.internal:8000 chbindex-dashboard
+# =============================================================================
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8080
+
+COPY docker/requirements-dashboard.txt /tmp/requirements-dashboard.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-dashboard.txt
+
+# Only the dashboard: its pages, ui helpers and .streamlit/config.toml (theme)
+COPY dashboard/ /app/dashboard/
+WORKDIR /app/dashboard
+
+# Run as a non-root user
+RUN useradd --create-home --uid 10001 app
+USER app
+
+# Cloud Run sends traffic to $PORT. Streamlit's own websocket keeps each
+# session on one instance, which is why the service is deployed with
+# --session-affinity.
+CMD streamlit run streamlit_app.py \
+    --server.port="${PORT}" \
+    --server.address=0.0.0.0 \
+    --server.headless=true \
+    --browser.gatherUsageStats=false

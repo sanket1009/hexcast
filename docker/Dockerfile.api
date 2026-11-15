@@ -75,7 +75,7 @@ EXPOSE 8000
 # Calls /health endpoint every 30 seconds
 # If it fails 3 times in a row, Cloud Run restarts the container
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f "http://localhost:${PORT}/health" || exit 1
 
 # Start the FastAPI application
 # uvicorn: the ASGI server that runs FastAPI
@@ -87,4 +87,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # --workers 2 — two parallel worker processes
 #               handles two simultaneous requests without blocking
 #               on M4 Pro or Cloud Run with 2 vCPUs this is appropriate
-CMD ["uvicorn", "src.serving.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Cloud Run sends traffic to $PORT (8080 unless the service says otherwise)
+ENV PORT=8000
+CMD uvicorn src.serving.api:app --host 0.0.0.0 --port "${PORT}" --workers 2
