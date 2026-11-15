@@ -784,11 +784,14 @@ class Service:
             crit = ces["burden_class"] == "CRITICAL"
             ces_out = {
                 "tracts": len(ces),
+                # Spearman = Pearson on ranks (average ranks for ties, as
+                # pandas does). Written out because method="spearman" imports
+                # scipy, which the API image does not install.
                 "spearman": round(
                     float(
-                        ces["burden_percentile"].corr(
-                            ces["ces_percentile"], method="spearman"
-                        )
+                        ces["burden_percentile"]
+                        .rank()
+                        .corr(ces["ces_percentile"].rank())
                     ),
                     3,
                 ),

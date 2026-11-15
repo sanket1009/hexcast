@@ -568,3 +568,52 @@ def test_geocode(client, monkeypatch):
 
     monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp({}, status=503))
     assert client.get("/geocode?address=1 Main St, Glendale").status_code == 502
+
+
+class _CesStore:
+    """Answers validation()'s queries: 20 tracts with CES scores, nothing else."""
+
+    backend = "stub"
+
+    def query(self, sql, params=None):
+        if "calenviroscreen" in sql:
+            n = 20
+            return pd.DataFrame(
+                {
+                    "geoid": [f"g{i}" for i in range(n)],
+                    "burden_percentile": [float(i) for i in range(n)],
+                    "burden_class": [
+                        "CRITICAL" if i >= 18 else "LOW" for i in range(n)
+                    ],
+                    # Same order except one swapped pair, and a tie
+                    "ces_percentile": [float(i) for i in range(n - 2)] + [80.0, 80.0],
+                }
+            )
+        return pd.DataFrame(
+            columns=[
+                "metric",
+                "value",
+                "status",
+                "moderate_threshold",
+                "major_threshold",
+            ]
+        )
+
+
+def test_validation_runs_without_scipy(config, monkeypatch):
+    # The API image does not install scipy. pandas imports it lazily for
+    # corr(method="spearman"), which broke /validation on Cloud Run.
+    import sys
+
+    monkeypatch.setitem(sys.modules, "scipy", None)
+    svc = Service(_CesStore(), config)
+    monkeypatch.setattr(svc, "_validation_series", lambda: [])
+    ces = svc.validation(WEEKS[-1])["ces_agreement"]
+    expected = (
+        pd.Series(range(20), dtype=float)
+        .rank()
+        .corr(pd.Series([float(i) for i in range(18)] + [80.0, 80.0]).rank())
+    )
+    assert ces["tracts"] == 20
+    assert ces["spearman"] == round(expected, 3)
+    assert ces["critical_in_ces_top_quarter"] == 1.0
