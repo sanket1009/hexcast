@@ -10,6 +10,8 @@ Run locally:
 Environment:
     CHBINDEX_CITY      city config to load (default los_angeles)
     CHBINDEX_DB_PATH   local DuckDB file, overriding storage.local_db_path
+    CHBINDEX_BACKEND   "gcp" to read BigQuery (Cloud Run), overriding storage.backend
+    GCP_PROJECT_ID     BigQuery project when the backend is gcp
 
 Endpoints (week is YYYY-MM-DD or "latest"):
     GET /health                         status, backend, newest week
@@ -69,6 +71,9 @@ def get_service() -> Service:
     config = load_config(os.environ.get("CHBINDEX_CITY", "los_angeles"))
     if db_path := os.environ.get("CHBINDEX_DB_PATH"):
         config["storage"]["local_db_path"] = db_path
+    # Cloud Run sets CHBINDEX_BACKEND=gcp; the laptop keeps pipeline.yaml's "local"
+    if backend := os.environ.get("CHBINDEX_BACKEND"):
+        config["storage"]["backend"] = backend
     return Service(make_store(config), config)
 
 
