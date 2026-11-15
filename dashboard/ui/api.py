@@ -88,6 +88,11 @@ def validation(week: str) -> dict:
     return _get(f"/weeks/{week}/validation")
 
 
+@st.cache_data(ttl=WEEK_TTL, show_spinner=False)
+def evaluation() -> dict:
+    return _get("/evaluation")
+
+
 @st.cache_data(ttl=STATIC_TTL, show_spinner=False)
 def hexes() -> pd.DataFrame:
     return pd.DataFrame(_get("/hexes"))

@@ -17,6 +17,7 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
+from src.evals.publish import baseline_rows, ml_rows
 from src.serving.api import app, get_service
 from src.serving.service import Service, add_drivers, format_people, split_community
 from src.serving.store import LocalStore
@@ -38,6 +39,56 @@ Z = {
     C: (0.1, 0.2, 1.8, 0.3),  # healthcare access
     D: (-1.0, -1.0, -1.0, -0.5),  # vulnerability least low, but last everywhere
 }
+
+
+# A small compare_summary.json: index and logreg scored on 2 test windows
+ML_SUMMARY = {
+    "rows": 1000, "oof_rows": 400, "oof_base_rate": 0.08,
+    "weeks": "2024-07-22..2026-05-25", "reference": "logreg_tuned",
+    "target": "enters_critical_4w", "git_sha": "abc1234", "test_windows": [[1, 2], [3, 4]],
+    "pooled": {
+        "index": {"pr_auc": 0.40, "roc_auc": 0.88, "precision_at_50_per_week": 0.59},
+        "logreg": {"pr_auc": 0.53, "roc_auc": 0.92, "precision_at_50_per_week": 0.72},
+        "logreg_tuned": {"pr_auc": 0.531, "roc_auc": 0.92, "precision_at_50_per_week": 0.72},
+    },
+    "per_window": {
+        "0": {"weeks": [1, 2], "base_rate": 0.07, "index": 0.45, "logreg": 0.62, "logreg_tuned": 0.62},
+        "1": {"weeks": [3, 4], "base_rate": 0.10, "index": 0.35, "logreg": 0.50, "logreg_tuned": 0.50},
+    },
+    "comparisons": {
+        "logreg_tuned_vs_index": {
+            "pr_auc_bootstrap": {"diff": 0.13, "ci_low": 0.10, "ci_high": 0.16,
+                                 "share_le_0": 0.0, "n_blocks": 161, "n_boot": 2000},
+            "delong": {"p_value": 1e-50},
+        },
+        "logreg_tuned_vs_logreg": {
+            "pr_auc_bootstrap": {"diff": 0.001, "ci_low": -0.003, "ci_high": 0.006,
+                                 "share_le_0": 0.27, "n_blocks": 161, "n_boot": 2000},
+            "delong": {"p_value": 1e-8},
+        },
+    },
+    "calibration": {
+        "brier": 0.051, "brier_base_rate_only": 0.074, "ece": 0.006,
+        "reliability": [{"predicted": 0.01, "observed": 0.0, "n": 200},
+                        {"predicted": 0.5, "observed": 0.48, "n": 200}],
+    },
+    "equity": {
+        "median_income": {
+            "terciles": {
+                t: {"tracts": 800, "base_rate": b, "pr_auc": 0.5, "topk_recall": r,
+                    "calibration_gap": -0.01}
+                for t, b, r in [("low", 0.17, 0.23), ("mid", 0.07, 0.17), ("high", 0.02, 0.09)]
+            },
+            "recall_ratio_min_max": 0.39, "lowest_recall_tercile": "high", "flag": True,
+        }
+    },
+}  # fmt: skip
+BRIEFING_BASELINE = {
+    "manifest": {"week": "2026-06-22", "git_sha": "69f10b2",
+                 "briefing_models": "claude-haiku-5-5",
+                 "evaluated_at": "2026-11-11T23:44:55+00:00"},
+    "metrics": {"faithfulness.numbers_match_data": 1.0, "rules.reading_grade.median": 10.2},
+}  # fmt: skip
 
 
 def _write(con, name: str, rows: list[dict]) -> None:
@@ -212,6 +263,8 @@ def db_path(tmp_path_factory):
         "calenviroscreen",
         [{"geoid": g, "ces_percentile": 50.0} for g in geoids],
     )
+    evals = ml_rows(ML_SUMMARY) + baseline_rows("briefings", BRIEFING_BASELINE)
+    _write(con, "eval_summary", [{**r, "n": r.get("n")} for r in evals])
     con.close()
     return path
 
@@ -416,6 +469,35 @@ def test_validation(client):
     assert last["lst_coverage"] == 0.75  # D has no LST
     assert (last["critical_high"], last["critical_medium"]) == (1, 1)
     assert v["weekly"][0]["critical_high"] == 0  # no CRITICAL on 06-08
+
+
+def test_evaluation(client):
+    e = client.get("/evaluation").json()
+    ml = e["ml"]
+    assert (ml["reference"], ml["top_k"], ml["test_windows"]) == ("logreg_tuned", 50, 2)
+    assert [s["model"] for s in ml["scorers"]] == ["logreg_tuned", "logreg", "index"]
+    assert ml["scorers"][1]["precision_at_k"] == 0.72
+    assert ml["windows"][1] == {
+        "window": 2,
+        "base_rate": 0.10,
+        "pr_auc": {"index": 0.35, "logreg": 0.50, "logreg_tuned": 0.50},
+    }
+    vs_index = next(c for c in ml["comparisons"] if c["model"] == "index")
+    assert (vs_index["ci_low"], vs_index["n_boot"]) == (0.10, 2000)
+    assert [b["bin"] for b in ml["calibration"]["reliability"]] == [1, 2]
+    low = next(
+        r
+        for r in ml["equity"]
+        if r["attribute"] == "median_income" and r["tercile"] == "low"
+    )
+    assert (low["topk_recall"], low["tracts"]) == (0.23, 800)
+    assert ml["equity_summary"] == [
+        {"attribute": "median_income", "recall_ratio_min_max": 0.39,
+         "lowest_recall_tercile": "high", "flag": True}
+    ]  # fmt: skip
+    assert e["briefings"]["metrics"]["rules.reading_grade.median"] == 10.2
+    assert e["briefings"]["model"] == "claude-haiku-5-5"
+    assert e["retrieval"] is None  # not published in the fixture
 
 
 def test_trends(client):

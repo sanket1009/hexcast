@@ -26,6 +26,7 @@ scorer.
 Writes (gitignored):
     data/processed/ml/compare_oof.parquet
     evals/results/ml/compare_summary.json
+    warehouse table eval_summary (src/evals/publish.py; --no-publish skips it)
 """
 
 import argparse
@@ -105,6 +106,9 @@ def spatial_groups(df: pd.DataFrame) -> np.ndarray:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-mlflow", action="store_true")
+    parser.add_argument(
+        "--no-publish", action="store_true", help="skip writing eval_summary"
+    )
     args = parser.parse_args()
     config = load_config()
     ml = config["ml"]
@@ -301,6 +305,13 @@ def main() -> int:
     oof.to_parquet(OOF_PATH, index=False)
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2, default=str))
     print(f"\nWrote {OOF_PATH} and {SUMMARY_PATH}")
+    if not args.no_publish:
+        # The dashboard's Validation page reads these numbers from the warehouse
+        from src.evals.publish import EVAL_TABLE, publish_eval_summary
+        from src.utils.config_loader import load_config as load_city_config
+
+        publish_eval_summary(load_city_config("los_angeles"))
+        print(f"Published to {EVAL_TABLE}")
     if not args.no_mlflow:
         run_id = log_to_mlflow(summary, ml["mlflow_tracking_uri"], [SUMMARY_PATH])
         print(

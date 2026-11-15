@@ -283,6 +283,99 @@ class Validation(BaseModel):
     weekly: list[WeekHealth]
 
 
+class Scorer(BaseModel):
+    model: str
+    pr_auc: float
+    roc_auc: float | None = None
+    precision_at_k: float | None = Field(
+        None, description="Share of each week's top-k tracts that did turn CRITICAL"
+    )
+    fold_pr_auc_mean: float | None = None
+    fold_pr_auc_sd: float | None = None
+
+
+class WindowScores(BaseModel):
+    window: int
+    base_rate: float
+    pr_auc: dict[str, float]
+
+
+class Comparison(BaseModel):
+    model: str = Field(description="Scorer the reference model is compared with")
+    diff: float = Field(description="Reference PR-AUC minus this scorer's")
+    ci_low: float
+    ci_high: float
+    share_le_0: float = Field(description="Share of bootstrap draws with no gain")
+    n_boot: int | None
+    delong_p: float | None = Field(
+        None, description="DeLong test on ROC-AUC (assumes independent rows)"
+    )
+
+
+class ReliabilityBin(BaseModel):
+    bin: int
+    predicted: float
+    observed: float
+    n: int | None
+
+
+class Calibration(BaseModel):
+    brier: float
+    brier_base_rate_only: float
+    ece: float
+    reliability: list[ReliabilityBin]
+
+
+class EquityRecall(BaseModel):
+    attribute: str
+    tercile: Literal["low", "mid", "high"]
+    tracts: int | None
+    base_rate: float
+    pr_auc: float
+    topk_recall: float
+    calibration_gap: float
+
+
+class EquityRecallSummary(BaseModel):
+    attribute: str
+    recall_ratio_min_max: float
+    lowest_recall_tercile: str | None
+    flag: bool
+
+
+class MlEvaluation(BaseModel):
+    evaluated_at: str | None
+    git_sha: str | None
+    reference: str = Field(description="The model the others are compared with")
+    target: str | None
+    weeks: str | None
+    rows: int
+    test_rows: int
+    base_rate: float
+    test_windows: int
+    top_k: int | None
+    scorers: list[Scorer]
+    windows: list[WindowScores]
+    comparisons: list[Comparison]
+    calibration: Calibration
+    equity: list[EquityRecall]
+    equity_summary: list[EquityRecallSummary]
+
+
+class SuiteScores(BaseModel):
+    model: str | None
+    detail: str | None
+    git_sha: str | None
+    evaluated_at: str | None
+    metrics: dict[str, float]
+
+
+class Evaluation(BaseModel):
+    ml: MlEvaluation | None
+    briefings: SuiteScores | None
+    retrieval: SuiteScores | None
+
+
 class Hexes(BaseModel):
     """Columnar to keep 24,000 cells small: index i of each list is one cell."""
 

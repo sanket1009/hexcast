@@ -469,17 +469,12 @@ def comparison_panel(geoids: list[str]) -> None:
     rows = by_geoid.loc[geoids]
     crit = int((rows["burden_class"] == "CRITICAL").sum())
     top = rows["main_driver"].value_counts()
-    c1, c2, c3 = st.columns([1, 1, 1.5], gap="small")
-    c1.metric(
-        "People", fmt.people(rows["population"].sum()), border=True, height="stretch"
-    )
-    c2.metric("CRITICAL", f"{crit} of {len(rows)}", border=True, height="stretch")
-    c3.metric(
-        "Top driver",
-        fmt.DRIVER_SHORT.get(top.index[0], "n/a") if len(top) else "n/a",
-        border=True,
-        height="stretch",
-        help="The most common largest component among the selected tracts.",
+    # A text strip, not metric boxes: three boxes in the panel column cut off their values
+    st.markdown(
+        f"**{fmt.people(rows['population'].sum())} people** · "
+        f"**{crit} of {len(rows)}** CRITICAL · top driver "
+        f"**{fmt.DRIVER_LABELS.get(top.index[0], 'n/a').lower() if len(top) else 'n/a'}**",
+        help="Top driver: the most common largest component among the selected tracts.",
     )
     names = {g: labels[g] for g in geoids}
     st.markdown("**What drives the score**")

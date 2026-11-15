@@ -187,9 +187,11 @@ def test_selecting_tracts_opens_panel_then_comparison(at):
 
     at.multiselect(key="tracts").set_value([A, B]).run()
     assert not at.exception
-    people, crit, driver = [m.value for m in at.metric][-3:]
-    assert (people, crit) == ("3,000", "2 of 2")
-    assert driver in ("Air", "Heat")  # A and B tie at one tract each
+    strip = next(m.value for m in at.markdown if "CRITICAL · top driver" in m.value)
+    assert strip.startswith("**3,000 people** · **2 of 2** CRITICAL")
+    assert (
+        "**air quality**" in strip or "**heat**" in strip
+    )  # A and B tie at one tract each
 
 
 def test_search_and_filters(at):
@@ -204,3 +206,47 @@ def test_search_and_filters(at):
     at.pills(key="cls").set_value(["CRITICAL"]).run()
     assert not at.exception
     assert any("Showing 2 of 4 tracts" in c.value for c in at.caption)
+
+
+def test_watch_list_page_and_open_in_overview(at):
+    at.run()
+    at.switch_page("app_pages/watchlist.py").run()
+    assert not at.exception
+    # C (0.7) is the only tract at or above the 0.5 threshold
+    assert at.header[0].value.startswith("1 tract has a 50% or higher chance")
+    table = at.dataframe(key="wl_table").value
+    assert table["Tract"].tolist() == ["Tract 3"]
+    assert table["Why the model flags it"].iloc[0] != ""
+
+    at.slider(key="wl_min").set_value(5).run()
+    assert at.dataframe(key="wl_table").value["Tract"].tolist() == [
+        "Tract 3",
+        "Tract 4",
+    ]
+
+
+def test_validation_page(at):
+    at.run()
+    at.switch_page("app_pages/validation.py").run()
+    assert not at.exception
+    assert at.header[0].value == "The data check passes for Jun 22, 2026"
+    subs = [s.value for s in at.subheader]
+    assert any("PR-AUC 0.53 against 0.40" in s for s in subs)
+    assert any(s.startswith("Recall is lowest in the highest third") for s in subs)
+    assert any("No accepted baseline published" in c.value for c in at.caption)
+
+
+def test_methods_page_links_every_story_to_the_readme(at):
+    at.run()
+    at.switch_page("app_pages/methods.py").run()
+    assert not at.exception
+    links = [m.value for m in at.markdown if "](https://github.com/" in m.value]
+    assert len(links) == len(at.subheader) == 12  # 11 stories + limitations
+
+
+def test_overview_reads_tracts_from_the_url(at):
+    # The watch list's "Open in Overview" sends the selected rows this way
+    at.query_params["tracts"] = ["Tract 3, Watts"]
+    at.run()
+    assert not at.exception
+    assert at.multiselect(key="tracts").value == [C]

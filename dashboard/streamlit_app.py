@@ -54,6 +54,27 @@ page = st.navigation(
             default=True,
             help="This week's burden map, KPI boxes, and a panel for any tract you select.",
         ),
+        st.Page(
+            "app_pages/watchlist.py",
+            title="Watch list",
+            icon=":material/trending_up:",
+            url_path="watch-list",
+            help="Tracts most likely to turn CRITICAL within 4 weeks, and why.",
+        ),
+        st.Page(
+            "app_pages/validation.py",
+            title="Validation",
+            icon=":material/fact_check:",
+            url_path="validation",
+            help="Data checks, pipeline health over time, and how well the model and briefings score.",
+        ),
+        st.Page(
+            "app_pages/methods.py",
+            title="Methods",
+            icon=":material/menu_book:",
+            url_path="methods",
+            help="The decisions behind the index, linked to the README.",
+        ),
     ],
     position="top",
 )
