@@ -417,7 +417,10 @@ def tract_panel(geoid: str) -> None:
 
     st.markdown("**Forecast**")
     if d.get("prob_critical_4w") is None:
-        st.caption("This tract is CRITICAL now, so the model does not forecast it.")
+        st.caption(
+            "Already CRITICAL. The model forecasts which tracts that are not CRITICAL yet "
+            "will become CRITICAL within 4 weeks; see the Watch list."
+        )
     else:
         st.markdown(
             f"Probability of becoming CRITICAL within 4 weeks: **{d['prob_critical_4w']:.0%}**"
