@@ -236,13 +236,14 @@ def test_validation_page(at):
     assert any("No accepted baseline published" in c.value for c in at.caption)
 
 
-def test_methods_page_links_every_story_to_the_readme(at):
+def test_methods_page_links_every_story_to_its_write_up(at):
     at.run()
     at.switch_page("app_pages/methods.py").run()
     assert not at.exception
     # main area only: the sidebar has its own "Hexcast" subheader and source link
     links = [m.value for m in at.main.markdown if "](https://github.com/" in m.value]
     assert len(links) == len(at.main.subheader) == 12  # 11 stories + limitations
+    assert sum("/docs/decisions.md#" in link for link in links) == 11
     assert at.sidebar.subheader[0].value == "Hexcast"
 
 

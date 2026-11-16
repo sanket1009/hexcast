@@ -229,3 +229,6 @@ _airflow_logs*/
 
 # Eval run outputs (baselines/ stays tracked)
 evals/results/
+
+# R session history (judge label review)
+.Rhistory

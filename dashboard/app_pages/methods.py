@@ -1,5 +1,5 @@
 """
-Methods: short decision stories, each linked to its README section.
+Methods: short decision stories, each linked to its section in docs/decisions.md.
 
 Static text on purpose: these are the decisions behind the pipeline and the
 results that settled them, recorded once. Live numbers (model scores, weekly
@@ -16,7 +16,7 @@ import streamlit as st
 
 REPO = os.environ.get("CHBINDEX_REPO_URL", "https://github.com/sanket1009/hexcast")
 
-# (title, story, README anchor or None for the README itself)
+# (title, story, anchor of its section in docs/decisions.md)
 STORIES = [
     (
         "PM2.5 between 21 monitors",
@@ -25,7 +25,7 @@ STORIES = [
         "nugget has a floor set by the sampling noise of a weekly mean. Leave-one-out validation "
         "refits the variogram in every fold, and the error is reported as MAE: R² over 21 points "
         "mostly reflects how far apart the monitors are.",
-        "pm25-kriging-with-an-honest-error-estimate",
+        "pm25-between-21-monitors",
     ),
     (
         "Ocean pixels in the heat layer",
@@ -33,7 +33,7 @@ STORIES = [
         "14 °C too cool, because cold ocean pixels fell inside their boundaries. Water is now "
         "masked with the QA water bit and a majority-vote land mask, and tracts that are only "
         "water get no heat value.",
-        "heat-land-surface-temperature",
+        "ocean-pixels-in-the-heat-layer",
     ),
     (
         "Drive times that reach every road",
@@ -42,7 +42,7 @@ STORIES = [
         "connected component. Mountain tracts dropped out until origins moved from polygon "
         "centroids to population-weighted centers. A 30 km buffer of hospitals and population "
         "credits the 56 border tracts whose nearest emergency department is in another county.",
-        "access-to-emergency-care-e2sfca",
+        "drive-times-that-reach-every-road",
     ),
     (
         "A composite that knows which way is bad",
@@ -52,21 +52,21 @@ STORIES = [
         "instead: heat and PM2.5 raise burden, access lowers it, and a run fails validation if "
         "burden rises with access. Population vulnerability from the ACS joined later as a "
         "fourth equal-weight component, added rather than multiplied with the hazards.",
-        "compound-burden-score",
+        "a-composite-that-knows-which-way-is-bad",
     ),
     (
         "A four-week PM2.5 window",
         "Weekly PM2.5 made the CRITICAL list churn from one week to the next. The index uses a "
         "4-week rolling mean of PM2.5 instead, and the drift checks track how much the CRITICAL "
         "list overlaps with the week before.",
-        None,
+        "a-four-week-pm25-window",
     ),
     (
         "Weights left alone after the CalEnviroScreen benchmark",
         "The index was compared with CalEnviroScreen, component by component. The weights were "
         "not tuned to match it: the comparison is reported as it is, on the Validation page, "
         "because matching another index is not the goal.",
-        "evaluation",
+        "weights-left-alone-after-the-calenviroscreen-benchmark",
     ),
     (
         "Confidence from correlated error",
@@ -75,7 +75,7 @@ STORIES = [
         "draws now samples the full tract-by-tract error covariance from the week's variogram, "
         "plus ±10% on the component weights. The weights barely matter; PM2.5 interpolation "
         "drives almost all of the doubt.",
-        None,
+        "confidence-from-correlated-error",
     ),
     (
         "Drift checks that do not cry wolf",
@@ -84,7 +84,7 @@ STORIES = [
         '"did the whole county move" from "did the spatial pattern change", with thresholds '
         "set from the 2024-2026 history. On that history the major flags land on real events: "
         "smoke weeks, cloud-masked heat weeks, and holiday Kriging errors.",
-        None,
+        "drift-checks-that-do-not-cry-wolf",
     ),
     (
         "Forecasting entry, not next week's class",
@@ -94,7 +94,7 @@ STORIES = [
         "once, so neighboring tracts cannot leak labels. Logistic regression beat tuned XGBoost "
         "and monotone LightGBM, and its terms add up exactly to its log-odds, which is how the "
         "dashboard shows why a tract is flagged without a second model.",
-        None,
+        "forecasting-entry-not-next-weeks-class",
     ),
     (
         "Retrieval chosen by an eval",
@@ -103,7 +103,7 @@ STORIES = [
         "are checked without model calls for numbers that are not in the tract data, talk about "
         "the pipeline, and actions for hazards the tract does not have. An early prompt had 24 "
         "of 25 sample briefings narrating how their urgency was set.",
-        "evaluation",
+        "retrieval-chosen-by-an-eval",
     ),
     (
         "Hexes where people live",
@@ -112,7 +112,7 @@ STORIES = [
         "448 small, dense tracts (1.38M people) without a cell of their own; resolution 9 "
         "leaves 6 (10,250 people). Whole-tract fill is still one click away to show the "
         "difference.",
-        "limitations",
+        "hexes-where-people-live",
     ),
 ]
 
@@ -126,14 +126,18 @@ LIMITS = [
 ]
 
 
-def readme(anchor: str | None) -> str:
-    return f"{REPO}#{anchor}" if anchor else f"{REPO}#readme"
+def readme(anchor: str) -> str:
+    return f"{REPO}#{anchor}"
+
+
+def decision(anchor: str) -> str:
+    return f"{REPO}/blob/main/docs/decisions.md#{anchor}"
 
 
 st.header("How the index is built, and what changed along the way")
 st.caption(
     "Each note is a decision and the result that settled it. Model scores and weekly checks "
-    "are on the Validation page; the full write-up is in the README."
+    "are on the Validation page; the full write-ups are in the repository docs."
 )
 
 stories, limits = st.columns([2, 1], gap="large")
@@ -141,7 +145,7 @@ with stories:
     for title, story, anchor in STORIES:
         st.subheader(title)
         st.markdown(story)
-        st.markdown(f"[Read more in the README]({readme(anchor)})")
+        st.markdown(f"[Read the full story]({decision(anchor)})")
 with limits:
     st.subheader("What the index cannot tell you")
     st.markdown("\n".join(f"- {line}" for line in LIMITS))
