@@ -219,7 +219,7 @@ with st.container(horizontal=True, vertical_alignment="center"):
     st.download_button(
         "Download this list (CSV)",
         export.to_csv(index=False),
-        file_name=f"chbindex_watchlist_{week}.csv",
+        file_name=f"hexcast_watchlist_{week}.csv",
         mime="text/csv",
         type="tertiary",
         icon=":material/download:",

@@ -1,7 +1,7 @@
 """
 API client for the dashboard.
 
-The dashboard reads only from the CHBIndex API (src/serving/api.py), never
+The dashboard reads only from the Hexcast API (src/serving/api.py), never
 from the warehouse. Each call is cached with st.cache_data: weekly results
 for 10 minutes (the API's own cache), static layers (hexes, outlines) for a
 day. Filters and selections are applied in the app on the cached results,

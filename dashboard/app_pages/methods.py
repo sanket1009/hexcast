@@ -14,7 +14,7 @@ import os
 
 import streamlit as st
 
-REPO = os.environ.get("CHBINDEX_REPO_URL", "https://github.com/sanket1009/chbindex")
+REPO = os.environ.get("CHBINDEX_REPO_URL", "https://github.com/sanket1009/hexcast")
 
 # (title, story, README anchor or None for the README itself)
 STORIES = [

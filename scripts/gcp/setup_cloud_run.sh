@@ -31,7 +31,7 @@ export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
 PROJECT_ID="${PROJECT_ID:-elevation-465520}"
 REGION="${REGION:-us-central1}"
-GITHUB_REPO="${GITHUB_REPO:-sanket1009/chbindex}"
+GITHUB_REPO="${GITHUB_REPO:-sanket1009/hexcast}"
 DATASET="${DATASET:-chbindex_06037}"
 POOL="github"
 PROVIDER="github-main"
@@ -122,6 +122,12 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER" \
     --issuer-uri "https://token.actions.githubusercontent.com" \
     --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
     --attribute-condition "assertion.repository == '${GITHUB_REPO}' && assertion.ref == 'refs/heads/main'"
+else
+  # Keep the condition in step with GITHUB_REPO (e.g. after a repo rename).
+  gcloud iam workload-identity-pools providers update-oidc "$PROVIDER" \
+    --workload-identity-pool "$POOL" --location global \
+    --attribute-condition "assertion.repository == '${GITHUB_REPO}' && assertion.ref == 'refs/heads/main'" \
+    >/dev/null
 fi
 gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA" \
   --role roles/iam.workloadIdentityUser \
