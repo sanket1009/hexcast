@@ -240,8 +240,10 @@ def test_methods_page_links_every_story_to_the_readme(at):
     at.run()
     at.switch_page("app_pages/methods.py").run()
     assert not at.exception
-    links = [m.value for m in at.markdown if "](https://github.com/" in m.value]
-    assert len(links) == len(at.subheader) == 12  # 11 stories + limitations
+    # main area only: the sidebar has its own "Hexcast" subheader and source link
+    links = [m.value for m in at.main.markdown if "](https://github.com/" in m.value]
+    assert len(links) == len(at.main.subheader) == 12  # 11 stories + limitations
+    assert at.sidebar.subheader[0].value == "Hexcast"
 
 
 def test_overview_reads_tracts_from_the_url(at):
