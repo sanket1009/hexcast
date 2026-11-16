@@ -31,12 +31,6 @@ except api.ApiError as exc:
 
 weeks = meta["weeks"][::-1]  # newest first
 with st.sidebar:
-    st.subheader("Hexcast", anchor=False)
-    st.caption(
-        "Weekly compound risk from heat, PM2.5, emergency care access and "
-        "population vulnerability for every census tract in Los Angeles County. "
-        "[Source on GitHub](https://github.com/sanket1009/hexcast)"
-    )
     st.selectbox(
         "Week", weeks, key="week", bind="query-params", format_func=fmt.week_label
     )
@@ -83,5 +77,13 @@ page = st.navigation(
         ),
     ],
     position="top",
+)
+
+# Project title on every page, above the page's own headline (h2)
+st.title("Hexcast", anchor=False)
+st.caption(
+    "Weekly compound risk from heat, PM2.5, emergency care access and population "
+    "vulnerability for every census tract in Los Angeles County. "
+    "[Source on GitHub](https://github.com/sanket1009/hexcast)"
 )
 page.run()

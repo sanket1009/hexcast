@@ -23,44 +23,11 @@ Every week, Hexcast scores all 2,498 census tracts in Los Angeles County on four
 | Does retrieval find the right policy pages? | Recall@3 0.38, MRR 0.70, every off-topic question rejected | Hand-labeled gold set; chose the embedding model |
 | Can a planted excerpt hijack a briefing? | 10 of 10 prompt injections ignored; 4 of 5 unsafe planted excerpts left out | 30 live calls, $0.03 |
 
-What did not work is reported too: the LLM judge did not agree well enough with my hand labels to be trusted on any criterion (weighted kappa under 0.61), so judge scores are not used as evidence ([details](docs/evals.md#a6-llm-as-judge)).
+What did not work is reported too: the LLM judge did not agree well enough with human labels (mine, on 20 briefings) to be trusted on any criterion (weighted kappa under 0.61), so judge scores are not used as evidence ([details](docs/evals.md#a6-llm-as-judge)).
 
 ## How it works
 
-```mermaid
-flowchart LR
-  subgraph sources[Sources]
-    aqs[EPA AQS PM2.5]
-    lst[Landsat 8 and 9 LST<br/>Earth Engine]
-    osm[OpenStreetMap roads<br/>Geofabrik]
-    ed[CDPH emergency depts]
-    census[Census TIGER, ACS,<br/>2020 blocks]
-  end
-
-  subgraph airflow[Airflow 3.3, weekly]
-    ingest[ingest_weekly] --> spatial[spatial_transform<br/>Kriging, LST, E2SFCA,<br/>composite, Gi*, confidence]
-    spatial --> retrain[model_retrain<br/>score, drift checks]
-    spatial --> alerts[alert_dispatch<br/>email digest]
-  end
-
-  sources --> ingest
-  spatial --> duck[(DuckDB)]
-  retrain --> duck
-  retrain -.-> mlflow[MLflow]
-
-  subgraph rag[Briefings, run by hand]
-    pdfs[12 policy PDFs] --> chroma[(ChromaDB<br/>Qwen3 embeddings)]
-    chroma --> haiku[Claude Haiku 5.5<br/>structured output]
-  end
-  duck --> haiku --> duck
-  evals[Eval suite A1 to A9] -.-> mlflow
-
-  duck -- sync --> bq[(BigQuery)]
-  subgraph run[Cloud Run]
-    api[FastAPI, private] --> dash[Streamlit, public]
-  end
-  bq --> api
-```
+[![Hexcast architecture: data sources, weekly Airflow DAGs, DuckDB, briefings, evals, BigQuery, Cloud Run and GitHub Actions](docs/images/architecture.svg)](docs/images/architecture.svg)
 
 1. **Ingest.** PM2.5 from EPA AQS monitors in LA and neighboring counties, land surface temperature from Landsat 8 and 9 via Earth Engine, emergency departments from the California Department of Public Health, and tracts, ACS indicators and 2020 blocks from the Census Bureau.
 2. **Spatial layers.** Ordinary Kriging turns about 21 monitors into tract PM2.5, with leave-one-out error every week. Landsat pixels are water-masked and averaged per tract. Enhanced two-step floating catchment (E2SFCA) on a 336,813-node drive network measures emergency care access, across county lines.
