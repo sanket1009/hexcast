@@ -1,4 +1,4 @@
-# CHBIndex dashboard theme (Phase 7 spec, approved 2026-11-12).
+# Hexcast dashboard theme (Phase 7 spec, approved 2026-11-12).
 # Editorial / public-health publication look: the interface is monochrome and
 # the data is the only color. Light and dark are both defined, so the viewer
 # keeps Streamlit's appearance toggle. No CSS: everything here is config.

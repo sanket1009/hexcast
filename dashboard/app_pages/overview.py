@@ -499,7 +499,7 @@ def comparison_panel(geoids: list[str]) -> None:
     st.download_button(
         "Download these tracts (CSV)",
         table.to_csv(index=False),
-        file_name=f"chbindex_{week}_{len(geoids)}_tracts.csv",
+        file_name=f"hexcast_{week}_{len(geoids)}_tracts.csv",
         mime="text/csv",
         type="tertiary",
         icon=":material/download:",

@@ -1,5 +1,5 @@
 """
-CHBIndex dashboard (Streamlit). Reads only from the CHBIndex API.
+Hexcast dashboard (Streamlit). Reads only from the Hexcast API.
 
 Run from the repo root, with the API running:
     PYTHONPATH=. .venv/bin/uvicorn src.serving.api:app
@@ -15,15 +15,15 @@ import streamlit as st
 from ui import api, fmt
 
 st.set_page_config(
-    page_title="CHBIndex: Los Angeles County",
-    page_icon=":material/map:",
+    page_title="Hexcast: Los Angeles County",
+    page_icon=":material/hexagon:",
     layout="wide",
 )
 
 try:
     meta = api.meta()
 except api.ApiError as exc:
-    st.error(str(exc), title="The CHBIndex API is not reachable")
+    st.error(str(exc), title="The Hexcast API is not reachable")
     st.caption(
         f"Start it with `uvicorn src.serving.api:app`, or set CHBINDEX_API_URL (now {api.API_URL})."
     )

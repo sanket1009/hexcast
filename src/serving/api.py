@@ -55,7 +55,7 @@ from src.serving.service import (
 from src.serving.store import make_store
 
 app = FastAPI(
-    title="CHBIndex API",
+    title="Hexcast API",
     summary="Weekly compound climate-health burden for census tracts",
     version="1.0.0",
 )
