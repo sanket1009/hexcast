@@ -12,13 +12,14 @@ shared as a link.
 
 import streamlit as st
 
-from ui import api, fmt
+from ui import api, fmt, style
 
 st.set_page_config(
     page_title="Hexcast: Los Angeles County",
     page_icon=":material/hexagon:",
     layout="wide",
 )
+style.apply()
 
 try:
     meta = api.meta()

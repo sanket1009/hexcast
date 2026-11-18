@@ -31,7 +31,7 @@ VIEW = pdk.ViewState(
 
 
 def _ink(theme: str, alpha: int) -> list[int]:
-    return [236, 236, 232, alpha] if theme == "dark" else [26, 26, 26, alpha]
+    return [245, 245, 247, alpha] if theme == "dark" else [29, 29, 31, alpha]
 
 
 def tract_tooltip_fields(df: pd.DataFrame, layer: Layer) -> pd.DataFrame:
@@ -173,7 +173,7 @@ def build_deck(
             )
         )
 
-    bg, fg = ("#202020", "#ECECE8") if theme == "dark" else ("#FAFAF7", "#1A1A1A")
+    bg, fg = ("#2C2C2E", "#F5F5F7") if theme == "dark" else ("#FFFFFF", "#1D1D1F")
     return pdk.Deck(
         layers=layers,
         initial_view_state=VIEW,
@@ -183,11 +183,12 @@ def build_deck(
             "style": {
                 "backgroundColor": bg,
                 "color": fg,
-                "fontFamily": "'Public Sans', sans-serif",
+                "fontFamily": "-apple-system, BlinkMacSystemFont, Inter, sans-serif",
                 "fontSize": "13px",
-                "border": "0.5px solid #888",
-                "borderRadius": "4px",
-                "padding": "6px 8px",
+                "border": "none",
+                "borderRadius": "10px",
+                "boxShadow": "0 4px 16px rgba(0, 0, 0, 0.18)",
+                "padding": "8px 10px",
             },
         },
     )
@@ -211,7 +212,7 @@ def legend_html(layer: Layer, theme: str) -> str:
     items = "".join(
         f'<span style="display:inline-flex;align-items:center;gap:6px;margin:0 14px 4px 0;'
         f'font-size:0.8rem;white-space:nowrap">'
-        f'<span style="width:12px;height:12px;border-radius:2px;background:{color};'
+        f'<span style="width:12px;height:12px;border-radius:4px;background:{color};'
         f'border:0.5px solid rgba(128,128,128,.6)"></span>{text}</span>'
         for color, text in legend_rows(layer, theme)
     )
