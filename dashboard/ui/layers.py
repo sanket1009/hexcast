@@ -106,7 +106,7 @@ def hex_to_rgb(color: str) -> list[int]:
 
 
 def missing_color(theme: str) -> str:
-    return "#3A3A3A" if theme == "dark" else "#CFCFCA"
+    return "#3A3A3C" if theme == "dark" else "#D1D1D6"
 
 
 def bin_index(values: pd.Series, layer: Layer) -> np.ndarray:
