@@ -27,7 +27,12 @@ What did not work is reported too: the LLM judge did not agree well enough with 
 
 ## How it works
 
-[![Hexcast systems: how Airflow, the warehouse, the forecasting model, the LLM briefings, Google Cloud and GitHub Actions interact in one weekly cycle](docs/images/systems.png)](docs/images/systems.png)
+<a href="docs/images/systems.png">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/systems_dark.png">
+  <img alt="Hexcast systems: how Airflow, the warehouse, the forecasting model, the LLM briefings, Google Cloud and GitHub Actions interact in one weekly cycle" src="docs/images/systems.png">
+</picture>
+</a>
 
 1. **Ingest.** PM2.5 from EPA AQS monitors in LA and neighboring counties, land surface temperature from Landsat 8 and 9 via Earth Engine, emergency departments from the California Department of Public Health, and tracts, ACS indicators and 2020 blocks from the Census Bureau.
 2. **Spatial layers.** Ordinary Kriging turns about 21 monitors into tract PM2.5, with leave-one-out error every week. Landsat pixels are water-masked and averaged per tract. Enhanced two-step floating catchment (E2SFCA) on a 336,813-node drive network measures emergency care access, across county lines.
@@ -38,7 +43,12 @@ What did not work is reported too: the LLM judge did not agree well enough with 
 
 One week of data, stage by stage, from monitor points to a 4-week forecast:
 
-[![Hexcast pipeline for the week of June 22, 2026: air monitors, Kriged PM2.5 and heat surfaces, drive time to an ER, compound burden, Gi* hot spots, H3 hexagons and the 4-week forecast, with the checks at each stage](docs/images/pipeline.png)](docs/images/pipeline.png)
+<a href="docs/images/pipeline.png">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/pipeline_dark.png">
+  <img alt="Hexcast pipeline for the week of June 22, 2026: air monitors, Kriged PM2.5 and heat surfaces, drive time to an ER, compound burden, Gi* hot spots, H3 hexagons and the 4-week forecast, with the checks at each stage" src="docs/images/pipeline.png">
+</picture>
+</a>
 
 Each step, its numbers and the alternatives I tried are in [docs/methods.md](docs/methods.md), with the component architecture diagram at the top.
 

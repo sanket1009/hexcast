@@ -2,7 +2,12 @@
 
 How each layer of Hexcast is built, with the numbers that settled each choice. Back to the [README](../README.md).
 
-[![Hexcast architecture: data sources, weekly Airflow DAGs, DuckDB, briefings, evals, BigQuery, Cloud Run and GitHub Actions](images/architecture.svg)](images/architecture.svg)
+<a href="images/architecture.svg">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/architecture_dark.svg">
+  <img alt="Hexcast architecture: data sources, weekly Airflow DAGs, DuckDB, briefings, evals, BigQuery, Cloud Run and GitHub Actions" src="images/architecture.svg">
+</picture>
+</a>
 
 - [Tracts, people and the study window](#tracts-people-and-the-study-window)
 - [PM2.5: Kriging with an honest error estimate](#pm25-kriging-with-an-honest-error-estimate)
