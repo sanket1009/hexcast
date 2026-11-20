@@ -31,7 +31,10 @@ Every tract-week in the test windows is predicted exactly once: 53,904 out-of-fo
 
 ## Results
 
-![Forecast results: PR-AUC by model with the three test windows, the tuned logistic regression's gain over each alternative with 95% spatial block bootstrap intervals, and calibration by decile](images/ml_results.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/ml_results_dark.png">
+  <img alt="Forecast results: PR-AUC by model with the three test windows, the tuned logistic regression's gain over each alternative with 95% spatial block bootstrap intervals, and calibration by decile" src="images/ml_results.png">
+</picture>
 
 | Scorer | PR-AUC | ROC-AUC | Precision in weekly top 50 |
 |---|---|---|---|
